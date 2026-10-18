@@ -7,6 +7,7 @@ edition = "2024"
 eframe = "0.37.0"
 encoding_rs = "0.8.42"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+morft = { version = "0.1.0", path = "../mor-parsers/crates/morft" }
 mortex = { version = "0.1.0", path = "../mor-parsers/crates/mortex" }
 morvfs = { version = "0.1.0", path = "../mor-parsers/crates/morvfs" }
 rfd = "0.17.2"

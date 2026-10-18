@@ -1,18 +1,23 @@
 use std::path::{ Path, PathBuf };
 
+use eframe::egui::emath::GuiRounding;
 use eframe::egui::{
-    self, Color32, ColorImage, Key, Pos2, Rect, RichText, ScrollArea, Sense, TextEdit, TextStyle, TextureHandle, TextureOptions, Vec2,
+    self, Color32, ColorImage, Key, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextEdit, TextStyle, TextureHandle, TextureOptions, Vec2,
 };
+use morft::{ Font, Glyph };
 use mortex::{ Image, Texture };
 use morvfs::{ Entry, Vfs };
 
 use crate::preview::{ self, Channels, Preview };
 
-const CHECKER_CELL:     f32       = 8.0;
-const ZOOM_MIN:         f32       = 0.05;
-const ZOOM_MAX:         f32       = 16.0;
-const FIT_MAX:          f32       = 8.0;
-const MODEL_EXTENSIONS: [&str; 4] = [ "mesh", "mms", "mma", "lsh" ];
+const CHECKER_CELL:         f32       = 8.0;
+const ZOOM_MIN:             f32       = 0.05;
+const ZOOM_MAX:             f32       = 16.0;
+const FIT_MAX:              f32       = 8.0;
+const FONT_SCALE_MIN:       f32       = 1.0;
+const FONT_SCALE_MAX:       f32       = 8.0;
+const GLYPH_CELL_MIN_WIDTH: f32       = 40.0;
+const MODEL_EXTENSIONS:     [&str; 4] = [ "mesh", "mms", "mma", "lsh" ];
 
 pub struct ViewerApp
 {
@@ -35,7 +40,13 @@ struct Current
     path:    String,
     data:    Vec<u8>,
     preview: Preview,
-    view:    Option<TextureView>,
+    view:    Option<View>,
+}
+
+enum View
+{
+    Texture( TextureView ),
+    Font( FontView ),
 }
 
 struct TextureView
@@ -67,6 +78,52 @@ impl TextureView
 
         Ok( () )
     }
+}
+
+struct FontView
+{
+    sample: TextureHandle,
+
+    /// In font file order; `None` for empty glyphs.
+    glyphs: Vec<Option<TextureHandle>>,
+
+    /// Largest glyph box in font pixels.
+    cell: Vec2,
+
+    scale: f32,
+}
+
+impl FontView
+{
+    fn new( ctx: &egui::Context, font: &Font ) -> Self
+    {
+        let ( width, height, coverage ) = preview::render_line( font, preview::FONT_SAMPLE );
+        let sample = upload_coverage( ctx, width, height, &coverage );
+
+        let glyphs = font
+            .glyphs()
+            .map(
+                |( _, glyph )|
+                {
+                    let width = to_usize( glyph.width );
+                    ( width > 0 ).then( || upload_coverage( ctx, width, to_usize( glyph.height ), &glyph.coverage ) )
+                }
+            )
+            .collect();
+
+        let widest = font.glyphs().map( |( _, glyph )| glyph.width.max( glyph.advance ) ).max().unwrap_or( 0 );
+        let cell   = Vec2::new( to_f32( to_usize( widest ) ), to_f32( to_usize( font.glyph_height() ) ) );
+
+        Self { sample, glyphs, cell, scale: 2.0 }
+    }
+}
+
+/// White texture with coverage in alpha, tinted when painted.
+fn upload_coverage( ctx: &egui::Context, width: usize, height: usize, coverage: &[u8] ) -> TextureHandle
+{
+    let pixels = coverage.iter().map( |&alpha| Color32::from_white_alpha( alpha ) ).collect();
+
+    ctx.load_texture( "glyph", ColorImage::new( [ width, height ], pixels ), TextureOptions::NEAREST )
 }
 
 fn upload( ctx: &egui::Context, image: &Image, channels: Channels ) -> TextureHandle
@@ -220,7 +277,8 @@ impl ViewerApp
             {
                 let view = match &preview
                 {
-                    Preview::Texture( texture ) => Some( TextureView::new( ctx, texture )? ),
+                    Preview::Texture( texture ) => Some( View::Texture( TextureView::new( ctx, texture )? ) ),
+                    Preview::Font( font ) => Some( View::Font( FontView::new( ctx, font ) ) ),
                     Preview::Text( _ ) | Preview::Binary => None,
                 };
 
@@ -276,7 +334,7 @@ impl ViewerApp
     fn on_save_png( &mut self )
     {
         let Some( current ) = &self.current else { return };
-        let Some( view ) = &current.view else { return };
+        let Some( View::Texture( view ) ) = &current.view else { return };
         let stem   = current.path.rsplit( '/' ).next().unwrap_or_default().trim_end_matches( ".tex" );
         let dialog = rfd::FileDialog::new().add_filter( "PNG", &[ "png" ] ).set_file_name( format!( "{stem}.png" ) );
         let Some( target ) = dialog.save_file() else { return };
@@ -417,7 +475,7 @@ impl ViewerApp
 
         match ( &current.preview, &mut current.view )
         {
-            ( Preview::Texture( texture ), Some( view ) ) =>
+            ( Preview::Texture( texture ), Some( View::Texture( view ) ) ) =>
             {
                 let controls = texture_controls( ui, texture, view, &current.data );
                 save_png = controls.save_png;
@@ -427,6 +485,7 @@ impl ViewerApp
                 }
                 texture_canvas( ui, view, &self.checker );
             }
+            ( Preview::Font( font ), Some( View::Font( view ) ) ) => font_view( ui, font, view, current.data.len() ),
             ( Preview::Text( text ), _ ) =>
             {
                 ScrollArea::both().auto_shrink( false ).show(
@@ -437,7 +496,7 @@ impl ViewerApp
                     }
                 );
             }
-            ( Preview::Texture( _ ) | Preview::Binary, _ ) =>
+            ( Preview::Texture( _ ) | Preview::Font( _ ) | Preview::Binary, _ ) =>
             {
                 if MODEL_EXTENSIONS.iter().any( |ext| preview::has_extension( &current.path, ext ) )
                 {
@@ -559,6 +618,77 @@ fn texture_canvas( ui: &mut egui::Ui, view: &mut TextureView, checker: &TextureH
             painter.image( view.handle.id(), rect, full_uv, Color32::WHITE );
         }
     );
+}
+
+fn font_view( ui: &mut egui::Ui, font: &Font, view: &mut FontView, size: usize )
+{
+    let info = format!(
+        "глифов: {} · пар кернинга: {} · высота строки: {} · высота глифа: {} · {size} байт",
+        font.glyphs().len(),
+        font.kerning_pairs().len(),
+        font.line_height(),
+        font.glyph_height(),
+    );
+    ui.label( info );
+    ui.horizontal(
+        |ui|
+        {
+            let scale = egui::Slider::new( &mut view.scale, FONT_SCALE_MIN..=FONT_SCALE_MAX ).step_by( 1.0 ).text( "масштаб" );
+            ui.add( scale );
+        }
+    );
+    ui.separator();
+
+    let tint    = ui.visuals().strong_text_color();
+    let full_uv = Rect::from_min_max( Pos2::ZERO, Pos2::new( 1.0, 1.0 ) );
+
+    ScrollArea::vertical().auto_shrink( false ).show(
+        ui,
+        |ui|
+        {
+            let ( rect, _ ) = ui.allocate_exact_size( view.sample.size_vec2() * view.scale, Sense::hover() );
+            ui.painter().image( view.sample.id(), rect, full_uv, tint );
+            ui.separator();
+            ui.horizontal_wrapped(
+                |ui|
+                {
+                    for ( ( ch, glyph ), handle ) in font.glyphs().zip( &view.glyphs )
+                    {
+                        glyph_cell( ui, ch, glyph, handle.as_ref(), view, tint );
+                    }
+                }
+            );
+        }
+    );
+}
+
+fn glyph_cell( ui: &mut egui::Ui, ch: char, glyph: &Glyph, handle: Option<&TextureHandle>, view: &FontView, tint: Color32 )
+{
+    let code = u32::from( ch );
+
+    let response = ui.vertical(
+        |ui|
+        {
+            let mut size = view.cell * view.scale;
+            size.x = size.x.max( GLYPH_CELL_MIN_WIDTH );
+            let ( rect, _ ) = ui.allocate_exact_size( size, Sense::hover() );
+            let painter = ui.painter();
+            painter.rect_stroke( rect, 0.0, Stroke::new( 1.0, ui.visuals().weak_text_color() ), StrokeKind::Inside );
+            if let Some( handle ) = handle
+            {
+                let glyph_rect = Rect::from_center_size( rect.center(), handle.size_vec2() * view.scale );
+                let full_uv    = Rect::from_min_max( Pos2::ZERO, Pos2::new( 1.0, 1.0 ) );
+                painter.image( handle.id(), glyph_rect.round_to_pixels( painter.pixels_per_point() ), full_uv, tint );
+            }
+            ui.label( RichText::new( format!( "{code:04X}" ) ).monospace().small() );
+        }
+    );
+
+    let hint = format!(
+        "{ch:?} U+{code:04X} · {}×{} · смещение {}, {} · шаг {}",
+        glyph.width, glyph.height, glyph.offset_x, glyph.offset_y, glyph.advance,
+    );
+    response.response.on_hover_text( hint );
 }
 
 fn hex_view( ui: &mut egui::Ui, data: &[u8] )

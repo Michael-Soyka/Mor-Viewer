@@ -1867,9 +1867,18 @@ dependencies = [
  "eframe",
  "encoding_rs",
  "image",
+ "morft",
  "mortex",
  "morvfs",
  "rfd",
+]
+
+[[package]]
+name = "morft"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
