@@ -4,14 +4,30 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.37.0"
-encoding_rs = "0.8.42"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+bytemuck = "1"
+eframe = { version = "0.37.0", features = ["persistence"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
+encoding_rs = "0.8"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tga"] }
+lewton = "0.10"
 morft = { version = "0.1.0", path = "../mor-parsers/crates/morft" }
+morscene = { version = "0.1.0", path = "../mor-parsers/crates/morscene", features = ["gltf"] }
+mormesh = { version = "0.1.0", path = "../mor-parsers/crates/mormesh", features = ["gltf"] }
 mortex = { version = "0.1.0", path = "../mor-parsers/crates/mortex" }
 morvfs = { version = "0.1.0", path = "../mor-parsers/crates/morvfs" }
 rfd = "0.17.2"
+rodio = { version = "0.23", default-features = false, features = ["playback"] }
+rust-i18n = "3"
+serde = { version = "1", features = ["derive"] }
+sys-locale = "0.3"
 
 # Texture decoding is unbearably slow unoptimized.
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
