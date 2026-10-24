@@ -1,187 +1,206 @@
+use std::collections::{ HashMap, HashSet };
 use std::path::{ Path, PathBuf };
 
-use eframe::egui::emath::GuiRounding;
 use eframe::egui::{
-    self, Color32, ColorImage, Key, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextEdit, TextStyle, TextureHandle, TextureOptions, Vec2,
+    self, Align, CornerRadius, CursorIcon, FontId, Key, Layout, Pos2, Rect, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, UiBuilder, Vec2,
 };
-use morft::{ Font, Glyph };
-use mortex::{ Image, Texture };
-use morvfs::{ Entry, Vfs };
 
-use crate::preview::{ self, Channels, Preview };
+use mormesh::Mesh;
+use mormesh::gltf::Gltf;
+use morscene::Scene;
 
-const CHECKER_CELL:         f32       = 8.0;
-const ZOOM_MIN:             f32       = 0.05;
-const ZOOM_MAX:             f32       = 16.0;
-const FIT_MAX:              f32       = 8.0;
-const FONT_SCALE_MIN:       f32       = 1.0;
-const FONT_SCALE_MAX:       f32       = 8.0;
-const GLYPH_CELL_MIN_WIDTH: f32       = 40.0;
-const MODEL_EXTENSIONS:     [&str; 4] = [ "mesh", "mms", "mma", "lsh" ];
+use rust_i18n::t;
+use crate::gltf;
+use crate::i18n;
+use crate::icons;
+use crate::library::{ FileKey, Library, NodeKey, Row, RowKind, file_name };
+use crate::model_viewer::{ self, ModelThumbnail };
+use crate::preview::Kind;
+use crate::settings::{ self, AboutInfo, Page, Settings, SidebarLayout };
+use crate::texture_viewer;
+use crate::theme::{ self, Palette };
+use crate::title_bar::{ self, TitleBar };
+use crate::viewer::{ self, Resources, Viewer };
+use crate::widgets::{ self, ROW_GAP, ROW_HEIGHT, RowIcon, to_f32 };
+
+const GUTTER:                 f32   = 4.0;
+const SIDEBAR_WIDTH:          f32   = 200.0;
+const SIDEBAR_MIN:            f32   = 140.0;
+const SIDEBAR_PADDING:        f32   = 2.0;
+const SEARCH_GAP:             f32   = 4.0;
+const TABS_HEIGHT:            f32   = 21.0;
+const MAIN_PADDING:           f32   = 2.0;
+const TABS_SCROLL_STEP:       f32   = 120.0;
+const STATUS_HEIGHT:          f32   = 25.0;
+const CARD_SIZE:              Vec2  = Vec2::new( 72.0, 104.0 );
+const CARD_GAP:               f32   = 5.0;
+const THUMB_SIZE:             f32   = 64.0;
+const THUMBS_PER_FRAME:       usize = 3;
+const MODEL_THUMBS_PER_FRAME: usize = 1;
+
+/// Model thumbnails are rendered at twice the card slot for high-DPI screens.
+const MODEL_THUMB_PIXELS: u32 = 128;
+
+struct Tab
+{
+    key:    FileKey,
+    name:   String,
+    data:   Vec<u8>,
+    viewer: Viewer,
+
+    /// Unpinned tabs are reused by the next single-click open.
+    pinned: bool,
+}
+
+#[ derive( Clone, Copy ) ]
+enum Export
+{
+    Raw,
+    Png,
+    Gltf,
+}
+
+impl Export
+{
+    /// Format a file converts to besides its raw bytes: textures to PNG, meshes and scenes to glTF.
+    fn conversion( name: &str ) -> Option<Self>
+    {
+        match crate::preview::kind_of( name )
+        {
+            Kind::Texture => Some( Self::Png ),
+            Kind::Model if crate::preview::has_extension( name, mormesh::EXTENSION ) => Some( Self::Gltf ),
+            Kind::Scene => Some( Self::Gltf ),
+            _ => None,
+        }
+    }
+
+    fn label( self ) -> &'static str
+    {
+        match self
+        {
+            Self::Raw => "context.export_raw",
+            Self::Png => "context.export_png",
+            Self::Gltf => "context.export_gltf",
+        }
+    }
+}
+
+enum Action
+{
+    Toggle( NodeKey ),
+    Open( FileKey, bool ),
+    Export( FileKey, Export ),
+    CloseArchive( usize ),
+}
+
+enum TabAction
+{
+    Activate( usize ),
+    Pin( usize ),
+    Close( usize ),
+    CloseOthers( usize ),
+    Export( usize, Export ),
+}
+
+enum Thumbnail
+{
+    Image( TextureHandle ),
+    Model( ModelThumbnail ),
+}
+
+impl Thumbnail
+{
+    fn id( &self ) -> egui::TextureId
+    {
+        match self
+        {
+            Self::Image( handle ) => handle.id(),
+            Self::Model( model ) => model.id(),
+        }
+    }
+
+    fn size( &self ) -> Vec2
+    {
+        match self
+        {
+            Self::Image( handle ) => handle.size_vec2(),
+            Self::Model( _ ) => Vec2::splat( THUMB_SIZE ),
+        }
+    }
+}
+
+enum GridLine<'a>
+{
+    Header( &'a Row ),
+    Cards( Vec<&'a Row> ),
+}
 
 pub struct ViewerApp
 {
-    archives:           Vec<PathBuf>,
-    vfs:                Option<Vfs>,
-    entries:            Vec<Entry>,
-    filter:             String,
-    visible:            Vec<usize>,
-    selected:           Option<usize>,
-    scroll_to_selected: bool,
-    list_offset:        f32,
-    list_height:        f32,
-    current:            Option<Current>,
-    checker:            TextureHandle,
-    status:             String,
-}
+    palette:    &'static Palette,
+    title_bar:  TitleBar,
+    library:    Library,
+    expanded:   HashSet<NodeKey>,
+    filter:     String,
+    rows:       Vec<Row>,
+    rows_dirty: bool,
+    settings:   Settings,
 
-struct Current
-{
-    path:    String,
-    data:    Vec<u8>,
-    preview: Preview,
-    view:    Option<View>,
-}
+    /// Open preferences page, if any.
+    preferences: Option<Page>,
 
-enum View
-{
-    Texture( TextureView ),
-    Font( FontView ),
-}
+    thumbnails:    HashMap<FileKey, Option<Thumbnail>>,
+    tabs:          Vec<Tab>,
+    active:        Option<usize>,
+    tabs_overflow: bool,
 
-struct TextureView
-{
-    face:     u32,
-    mip:      u32,
-    channels: Channels,
-    image:    Image,
-    handle:   TextureHandle,
-    zoom:     f32,
-    fit:      bool,
-}
+    /// Tab strip state the active tab was last scrolled into view for: active, tab count, overflow.
+    revealed_tab: Option<(Option<usize>, usize, bool)>,
 
-impl TextureView
-{
-    fn new( ctx: &egui::Context, texture: &Texture ) -> Result<Self, String>
-    {
-        let image    = texture.decode( 0, 0 ).map_err( |err| err.to_string() )?;
-        let channels = Channels::Rgba;
-        let handle   = upload( ctx, &image, channels );
-
-        Ok( Self { face: 0, mip: 0, channels, image, handle, zoom: 1.0, fit: true } )
-    }
-
-    fn redecode( &mut self, ctx: &egui::Context, texture: &Texture ) -> Result<(), String>
-    {
-        self.image = texture.decode( self.face, self.mip ).map_err( |err| err.to_string() )?;
-        self.handle = upload( ctx, &self.image, self.channels );
-
-        Ok( () )
-    }
-}
-
-struct FontView
-{
-    sample: TextureHandle,
-
-    /// In font file order; `None` for empty glyphs.
-    glyphs: Vec<Option<TextureHandle>>,
-
-    /// Largest glyph box in font pixels.
-    cell: Vec2,
-
-    scale: f32,
-}
-
-impl FontView
-{
-    fn new( ctx: &egui::Context, font: &Font ) -> Self
-    {
-        let ( width, height, coverage ) = preview::render_line( font, preview::FONT_SAMPLE );
-        let sample = upload_coverage( ctx, width, height, &coverage );
-
-        let glyphs = font
-            .glyphs()
-            .map(
-                |( _, glyph )|
-                {
-                    let width = to_usize( glyph.width );
-                    ( width > 0 ).then( || upload_coverage( ctx, width, to_usize( glyph.height ), &glyph.coverage ) )
-                }
-            )
-            .collect();
-
-        let widest = font.glyphs().map( |( _, glyph )| glyph.width.max( glyph.advance ) ).max().unwrap_or( 0 );
-        let cell   = Vec2::new( to_f32( to_usize( widest ) ), to_f32( to_usize( font.glyph_height() ) ) );
-
-        Self { sample, glyphs, cell, scale: 2.0 }
-    }
-}
-
-/// White texture with coverage in alpha, tinted when painted.
-fn upload_coverage( ctx: &egui::Context, width: usize, height: usize, coverage: &[u8] ) -> TextureHandle
-{
-    let pixels = coverage.iter().map( |&alpha| Color32::from_white_alpha( alpha ) ).collect();
-
-    ctx.load_texture( "glyph", ColorImage::new( [ width, height ], pixels ), TextureOptions::NEAREST )
-}
-
-fn upload( ctx: &egui::Context, image: &Image, channels: Channels ) -> TextureHandle
-{
-    let size  = [ to_usize( image.width ), to_usize( image.height ) ];
-    let color = ColorImage::from_rgba_unmultiplied( size, &channels.apply( image ) );
-
-    ctx.load_texture( "preview", color, TextureOptions::NEAREST )
-}
-
-fn to_usize( value: u32 ) -> usize
-{
-    usize::try_from( value ).unwrap_or( usize::MAX )
-}
-
-/// egui lays out in f32; there is no lossless conversion from usize.
-fn to_f32( value: usize ) -> f32
-{
-    value as f32
-}
-
-fn file_name( path: &Path ) -> String
-{
-    path.file_name().map( |name| name.to_string_lossy().into_owned() ).unwrap_or_default()
-}
-
-fn list_archives( dir: &Path ) -> std::io::Result<Vec<PathBuf>>
-{
-    let mut archives: Vec<PathBuf> = std::fs::read_dir( dir )?
-        .filter_map( |entry| entry.ok().map( |entry| entry.path() ) )
-        .filter( |path| path.is_file() && preview::has_extension( &path.to_string_lossy(), morvfs::EXTENSION ) )
-        .collect();
-    archives.sort();
-
-    Ok( archives )
+    sidebar_width: f32,
+    scroll_to_row: Option<usize>,
+    list_offset:   f32,
+    list_height:   f32,
+    checker:       TextureHandle,
+    render_state:  Option<eframe::egui_wgpu::RenderState>,
+    message:       Option<String>,
 }
 
 impl ViewerApp
 {
     pub fn new( cc: &eframe::CreationContext<'_>, start: Option<PathBuf> ) -> Self
     {
-        let ( light, dark ) = ( Color32::from_gray( 200 ), Color32::from_gray( 150 ) );
-        let checker = ColorImage::new( [ 2, 2 ], vec![ light, dark, dark, light ] );
+        let settings: Settings = cc.storage.and_then( |storage| eframe::get_value( storage, settings::STORAGE_KEY ) ).unwrap_or_default();
+        let palette = settings.theme.palette( cc.egui_ctx.system_theme() );
+        theme::apply_palette( &cc.egui_ctx, palette );
+        egui_extras::install_image_loaders( &cc.egui_ctx );
+        cc.egui_ctx.set_zoom_factor( settings.ui_scale );
+        i18n::apply( settings.language );
+        let start = start.or_else( || settings.game_data.clone() );
 
         let mut app = Self
         {
-            archives:           Vec::new(),
-            vfs:                None,
-            entries:            Vec::new(),
-            filter:             String::new(),
-            visible:            Vec::new(),
-            selected:           None,
-            scroll_to_selected: false,
-            list_offset:        0.0,
-            list_height:        0.0,
-            current:            None,
-            checker:            cc.egui_ctx.load_texture( "checker", checker, TextureOptions::NEAREST_REPEAT ),
-            status:             "Откройте папку data игры или архив .vfs".to_owned(),
+            palette,
+            title_bar:     TitleBar::new( &cc.egui_ctx ),
+            library:       Library::default(),
+            expanded:      HashSet::new(),
+            filter:        String::new(),
+            rows:          Vec::new(),
+            rows_dirty:    true,
+            settings,
+            preferences:   None,
+            thumbnails:    HashMap::new(),
+            tabs:          Vec::new(),
+            active:        None,
+            tabs_overflow: false,
+            revealed_tab:  None,
+            sidebar_width: SIDEBAR_WIDTH,
+            scroll_to_row: None,
+            list_offset:   0.0,
+            list_height:   0.0,
+            checker:       texture_viewer::new_checker( &cc.egui_ctx ),
+            render_state:  cc.wgpu_render_state.clone(),
+            message:       None,
         };
 
         if let Some( path ) = start
@@ -192,7 +211,7 @@ impl ViewerApp
             }
             else
             {
-                app.on_open_archive( &path );
+                app.on_open_archives( &[ path ] );
             }
         }
 
@@ -201,522 +220,1037 @@ impl ViewerApp
 
     fn on_open_folder( &mut self, dir: &Path )
     {
-        match list_archives( dir )
+        let ( library, errors ) = Library::open_folder( dir );
+        self.message = match ( errors.is_empty(), library.archives.is_empty() )
         {
-            Ok( archives ) if archives.is_empty() => self.status = format!( "В {} нет архивов .vfs", dir.display() ),
-            Ok( archives ) =>
-            {
-                let first = archives
-                    .iter()
-                    .find( |path| file_name( path ).eq_ignore_ascii_case( "Textures.vfs" ) )
-                    .or( archives.first() )
-                    .cloned();
-
-                self.archives = archives;
-                if let Some( path ) = first
-                {
-                    self.on_open_archive( &path );
-                }
-            }
-            Err( err ) => self.status = format!( "{}: {err}", dir.display() ),
-        }
+            ( false, _ ) => Some( errors.join( "; " ) ),
+            ( true, true ) => Some( t!( "status.no_archives", path = dir.display() ).into_owned() ),
+            ( true, false ) => None,
+        };
+        self.set_library( library );
     }
 
-    fn on_open_archive( &mut self, path: &Path )
+    /// Adds the archives to the open ones and expands them.
+    fn on_open_archives( &mut self, paths: &[PathBuf] )
     {
-        let vfs = match Vfs::open( path )
-        {
-            Ok( vfs ) => vfs,
-            Err( err ) =>
-            {
-                self.status = format!( "{}: {err}", path.display() );
-                return;
-            }
-        };
+        let mut errors = Vec::new();
 
-        if !self.archives.iter().any( |known| known == path )
+        for path in paths
         {
-            self.archives = path.parent().and_then( |dir| list_archives( dir ).ok() ).unwrap_or_else( || vec![ path.to_owned() ] );
+            match self.library.add_archive( path )
+            {
+                Ok( archive ) =>
+                {
+                    self.expanded.insert( NodeKey { archive, folder: String::new() } );
+                }
+                Err( err ) => errors.push( err ),
+            }
         }
-        self.status = format!( "{}: {} файлов", file_name( path ), vfs.len() );
-        self.entries = vfs.entries().cloned().collect();
-        self.vfs = Some( vfs );
-        self.selected = None;
-        self.current = None;
-        self.list_offset = 0.0;
-        self.on_filter_change();
+        self.message = ( !errors.is_empty() ).then( || errors.join( "; " ) );
+        self.rows_dirty = true;
+    }
+
+    /// Closes the archive and its tabs; keys of the archives after it move down by one.
+    fn on_close_archive( &mut self, index: usize )
+    {
+        if index >= self.library.archives.len()
+        {
+            return;
+        }
+
+        let active = self.active_tab().map( |tab| tab.key );
+        self.library.remove( index );
+
+        let shift = |archive: usize| match archive.cmp( &index )
+        {
+            std::cmp::Ordering::Less => Some( archive ),
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Greater => Some( archive - 1 ),
+        };
+        let shift_key = |key: FileKey| shift( key.archive ).map( |archive| FileKey { archive, ..key } );
+
+        self.tabs.retain_mut(
+            |tab|
+            {
+                let Some( key ) = shift_key( tab.key ) else { return false };
+                tab.key = key;
+
+                true
+            }
+        );
+        let active = active.and_then( shift_key ).and_then( |key| self.tabs.iter().position( |tab| tab.key == key ) );
+        self.active = active.or( ( !self.tabs.is_empty() ).then_some( 0 ) );
+
+        self.thumbnails = std::mem::take( &mut self.thumbnails ).into_iter().filter_map( |( key, thumbnail )| Some( ( shift_key( key )?, thumbnail ) ) ).collect();
+        self.expanded = std::mem::take( &mut self.expanded ).into_iter().filter_map( |node| Some( NodeKey { archive: shift( node.archive )?, ..node } ) ).collect();
+        self.rows_dirty = true;
+    }
+
+    fn set_library( &mut self, library: Library )
+    {
+        self.library = library;
+        self.expanded.clear();
+        self.thumbnails.clear();
+        self.tabs.clear();
+        self.active = None;
+        self.rows_dirty = true;
     }
 
     fn on_filter_change( &mut self )
     {
-        let needle = self.filter.to_lowercase();
-
-        self.visible = ( 0..self.entries.len() )
-            .filter( |&index| needle.is_empty() || self.entries[ index ].path.to_lowercase().contains( &needle ) )
-            .collect();
+        self.rows_dirty = true;
     }
 
-    fn on_select( &mut self, ctx: &egui::Context, index: usize )
+    fn on_toggle( &mut self, node: NodeKey )
     {
-        self.selected = Some( index );
-        let ( Some( vfs ), Some( entry ) ) = ( &self.vfs, self.entries.get( index ) ) else { return };
-        let path = entry.path.clone();
+        if !self.expanded.remove( &node )
+        {
+            self.expanded.insert( node );
+        }
+        self.rows_dirty = true;
+    }
 
-        let data = match vfs.read_entry( entry )
+    fn on_open_file( &mut self, ctx: &egui::Context, key: FileKey, pin: bool )
+    {
+        if let Some( index ) = self.tabs.iter().position( |tab| tab.key == key )
+        {
+            self.active = Some( index );
+            self.tabs[ index ].pinned |= pin;
+            return;
+        }
+
+        let Some( ( archive, entry ) ) = self.library.entry( key ) else { return };
+        let data = match archive.vfs.read_entry( entry )
         {
             Ok( data ) => data,
             Err( err ) =>
             {
-                self.current = None;
-                self.status = format!( "{path}: {err}" );
+                self.message = Some( format!( "{}: {err}", entry.path ) );
                 return;
             }
         };
-        let loaded = Preview::new( &path, &data ).and_then(
-            |preview|
-            {
-                let view = match &preview
-                {
-                    Preview::Texture( texture ) => Some( View::Texture( TextureView::new( ctx, texture )? ) ),
-                    Preview::Font( font ) => Some( View::Font( FontView::new( ctx, font ) ) ),
-                    Preview::Text( _ ) | Preview::Binary => None,
-                };
-
-                Ok( ( preview, view ) )
-            }
-        );
-        match loaded
+        let path      = entry.path.clone();
+        let library   = &self.library;
+        let find_file = |name: &str| library.read_by_name( name );
+        let archives  = library.paths();
+        let resources = Resources
         {
-            Ok( ( preview, view ) ) =>
+            render_state:      self.render_state.as_ref(),
+            find_file:         &find_file,
+            hex_bytes_per_row: self.settings.hex_bytes_per_row,
+            archives:          &archives,
+        };
+        let ( viewer, error ) = Viewer::new( ctx, &path, &data, &resources );
+        self.message = error.map( |err| format!( "{path}: {err}" ) );
+
+        let tab = Tab { key, name: file_name( &path ).to_owned(), data, viewer, pinned: pin };
+        let index = match self.tabs.iter().position( |tab| !tab.pinned )
+        {
+            Some( index ) =>
             {
-                self.status = format!( "{path}: {} байт", data.len() );
-                self.current = Some( Current { path, data, preview, view } );
+                self.tabs[ index ] = tab;
+                index
             }
-            Err( err ) =>
+            None =>
             {
-                self.status = format!( "{path}: {err}" );
-                self.current = Some( Current { path, data, preview: Preview::Binary, view: None } );
+                let index = self.active.map_or( self.tabs.len(), |active| active + 1 );
+                self.tabs.insert( index, tab );
+                index
             }
+        };
+        self.active = Some( index );
+    }
+
+    fn on_close_tab( &mut self, index: usize )
+    {
+        if index >= self.tabs.len()
+        {
+            return;
         }
+        self.tabs.remove( index );
+        self.active = match self.active
+        {
+            _ if self.tabs.is_empty() => None,
+            Some( active ) if active > index || active == self.tabs.len() => Some( active - 1 ),
+            active => active,
+        };
     }
 
     fn on_step_selection( &mut self, ctx: &egui::Context, forward: bool )
     {
-        let position = self.selected.and_then( |index| self.visible.iter().position( |&visible| visible == index ) );
+        let files: Vec<(usize, FileKey)> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(
+                |( index, row )| match row.kind
+                {
+                    RowKind::File( key, _ ) => Some( ( index, key ) ),
+                    _ => None,
+                }
+            )
+            .collect();
+        let current  = self.active_tab().map( |tab| tab.key );
+        let position = files.iter().position( |&( _, key )| Some( key ) == current );
         let next = match ( position, forward )
         {
             ( None, _ ) => 0,
-            ( Some( position ), true ) => ( position + 1 ).min( self.visible.len().saturating_sub( 1 ) ),
+            ( Some( position ), true ) => ( position + 1 ).min( files.len().saturating_sub( 1 ) ),
             ( Some( position ), false ) => position.saturating_sub( 1 ),
         };
-
-        if let Some( &index ) = self.visible.get( next )
-            && Some( index ) != self.selected
+        if let Some( &( row, key ) ) = files.get( next )
+            && Some( key ) != current
         {
-            self.scroll_to_selected = true;
-            self.on_select( ctx, index );
+            self.scroll_to_row = Some( row );
+            self.on_open_file( ctx, key, false );
         }
     }
 
-    fn on_extract( &mut self )
+    fn on_close_others( &mut self, index: usize )
     {
-        let Some( current ) = &self.current else { return };
-        let name = current.path.rsplit( '/' ).next().unwrap_or_default();
-        let Some( target ) = rfd::FileDialog::new().set_file_name( name ).save_file() else { return };
-
-        self.status = match std::fs::write( &target, &current.data )
+        if index >= self.tabs.len()
         {
-            Ok( () ) => format!( "Сохранено: {}", target.display() ),
-            Err( err ) => format!( "{}: {err}", target.display() ),
-        };
+            return;
+        }
+        let tab = self.tabs.swap_remove( index );
+        self.tabs = vec![ tab ];
+        self.active = Some( 0 );
     }
 
-    fn on_save_png( &mut self )
+    /// PNG exports what the tab shows, with its channel toggles.
+    fn on_export_tab( &mut self, index: usize, export: Export )
     {
-        let Some( current ) = &self.current else { return };
-        let Some( View::Texture( view ) ) = &current.view else { return };
-        let stem   = current.path.rsplit( '/' ).next().unwrap_or_default().trim_end_matches( ".tex" );
-        let dialog = rfd::FileDialog::new().add_filter( "PNG", &[ "png" ] ).set_file_name( format!( "{stem}.png" ) );
-        let Some( target ) = dialog.save_file() else { return };
-        let rgba  = view.channels.apply( &view.image );
-        let saved = image::save_buffer( &target, &rgba, view.image.width, view.image.height, image::ExtendedColorType::Rgba8 );
-
-        self.status = match saved
+        let Some( tab ) = self.tabs.get( index ) else { return };
+        let message = match ( export, &tab.viewer )
         {
-            Ok( () ) => format!( "Сохранено: {}", target.display() ),
-            Err( err ) => format!( "{}: {err}", target.display() ),
+            ( Export::Raw, _ ) => save_raw_as( &tab.name, &tab.data ),
+            ( Export::Png, Viewer::Texture( viewer ) ) => save_png_as( &tab.name, |target| viewer.export_png( target ) ),
+            ( Export::Png, _ ) => None,
+            ( Export::Gltf, _ ) => save_gltf_as( &tab.name, &tab.data, &self.library ),
         };
+        if message.is_some()
+        {
+            self.message = message;
+        }
     }
 
-    fn toolbar( &mut self, ui: &mut egui::Ui )
+    fn on_export_file( &mut self, key: FileKey, export: Export )
     {
-        ui.horizontal(
+        let Some( ( archive, entry ) ) = self.library.entry( key ) else { return };
+        let data = match archive.vfs.read_entry( entry )
+        {
+            Ok( data ) => data,
+            Err( err ) =>
+            {
+                self.message = Some( format!( "{}: {err}", entry.path ) );
+                return;
+            }
+        };
+        let name    = file_name( &entry.path );
+        let message = match export
+        {
+            Export::Raw => save_raw_as( name, &data ),
+            Export::Png => save_png_as(
+                name,
+                |target|
+                {
+                    let image = texture_viewer::decode( &entry.path, &data )?;
+                    texture_viewer::save_png( &image.rgba, image.width, image.height, target )
+                }
+            ),
+            Export::Gltf => save_gltf_as( name, &data, &self.library ),
+        };
+        if message.is_some()
+        {
+            self.message = message;
+        }
+    }
+
+    fn active_tab( &self ) -> Option<&Tab>
+    {
+        self.active.and_then( |index| self.tabs.get( index ) )
+    }
+
+    fn menu( &mut self, ui: &mut egui::Ui )
+    {
+        widgets::menu_visuals( ui, self.palette );
+
+        egui::MenuBar::new().style( title_menu_style ).ui(
+            ui,
             |ui|
             {
-                if ui.button( "Папка data…" ).clicked()
-                    && let Some( dir ) = rfd::FileDialog::new().pick_folder()
-                {
-                    self.on_open_folder( &dir );
-                }
-                if ui.button( "Архив .vfs…" ).clicked()
-                    && let Some( path ) = rfd::FileDialog::new().add_filter( "VFS", &[ morvfs::EXTENSION ] ).pick_file()
-                {
-                    self.on_open_archive( &path );
-                }
-
-                let current       = self.vfs.as_ref().map( |vfs| vfs.path().to_owned() );
-                let mut chosen    = None;
-                let selected_text = current.as_deref().map( file_name ).unwrap_or_else( || "—".to_owned() );
-
-                egui::ComboBox::from_id_salt( "archive" ).selected_text( selected_text ).width( 180.0 ).show_ui(
-                    ui,
+                ui.menu_button(
+                    t!( "menu.file" ),
                     |ui|
                     {
-                        for archive in &self.archives
+                        if ui.button( t!( "menu.open_folder" ) ).clicked()
+                            && let Some( dir ) = rfd::FileDialog::new().pick_folder()
                         {
-                            let is_current = current.as_deref() == Some( archive.as_path() );
-                            if ui.selectable_label( is_current, file_name( archive ) ).clicked() && !is_current
-                            {
-                                chosen = Some( archive.clone() );
-                            }
+                            self.on_open_folder( &dir );
+                        }
+                        if ui.button( t!( "menu.open_archive" ) ).clicked()
+                            && let Some( paths ) = rfd::FileDialog::new().add_filter( "VFS", &[ morvfs::EXTENSION ] ).pick_files()
+                        {
+                            self.on_open_archives( &paths );
+                        }
+                        ui.separator();
+                        if ui.button( t!( "menu.preferences" ) ).clicked()
+                        {
+                            self.preferences = Some( Page::General );
+                        }
+                        ui.separator();
+                        if ui.button( t!( "menu.exit" ) ).clicked()
+                        {
+                            ui.ctx().send_viewport_cmd( egui::ViewportCommand::Close );
                         }
                     }
                 );
-                if let Some( path ) = chosen
-                {
-                    self.on_open_archive( &path );
-                }
-
-                ui.separator();
-                if ui.add_enabled( self.current.is_some(), egui::Button::new( "Извлечь файл…" ) ).clicked()
-                {
-                    self.on_extract();
-                }
+                ui.menu_button(
+                    t!( "menu.view" ),
+                    |ui|
+                    {
+                        ui.radio_value( &mut self.settings.sidebar, SidebarLayout::List, t!( "menu.list" ) );
+                        ui.radio_value( &mut self.settings.sidebar, SidebarLayout::Grid, t!( "menu.thumbnails" ) );
+                    }
+                );
             }
         );
     }
 
-    fn file_list( &mut self, ui: &mut egui::Ui )
+    /// Returns the top of the file list, so the main panel lines up with it.
+    fn sidebar( &mut self, ui: &mut egui::Ui ) -> f32
     {
-        let filter_id = ui.make_persistent_id( "filter" );
-        let filter    = TextEdit::singleline( &mut self.filter ).id( filter_id ).hint_text( "Фильтр, например .tex" ).desired_width( f32::INFINITY );
-        if ui.add( filter ).changed()
+        let palette = self.palette;
+        let rect    = ui.max_rect();
+
+        let search = widgets::search( ui, palette, &mut self.filter, &t!( "sidebar.search" ) );
+        if search.changed()
         {
             self.on_filter_change();
         }
-        ui.label( format!( "{} из {}", self.visible.len(), self.entries.len() ) );
-        ui.separator();
 
-        let focus = ui.ctx().memory( |memory| memory.focused() );
-        if focus.is_none_or( |id| id == filter_id )
+        let list = Rect::from_min_max( Pos2::new( rect.min.x, search.rect.max.y + SEARCH_GAP ), rect.max );
+        ui.painter().rect_stroke( list, CornerRadius::same( theme::PANEL_RADIUS ), Stroke::new( 1.0, palette.border ), StrokeKind::Inside );
+        let inner  = list.shrink( 1.0 + SIDEBAR_PADDING );
+        let mut ui = ui.new_child( UiBuilder::new().max_rect( inner ).layout( Layout::top_down( Align::Min ) ) );
+        ui.set_clip_rect( inner );
+        ui.spacing_mut().item_spacing = Vec2::new( 0.0, ROW_GAP );
+
+        if self.rows_dirty
         {
-            let ( down, up ) = ui.input( |input| ( input.key_pressed( Key::ArrowDown ), input.key_pressed( Key::ArrowUp ) ) );
-            if down || up
+            self.rows = self.library.rows( &self.expanded, &self.filter );
+            self.rows_dirty = false;
+        }
+        let actions = match self.settings.sidebar
+        {
+            SidebarLayout::List => self.tree_list( &mut ui ),
+            SidebarLayout::Grid => self.tree_grid( &mut ui ),
+        };
+        for action in actions
+        {
+            match action
             {
-                self.on_step_selection( ui.ctx(), down );
+                Action::Toggle( node ) => self.on_toggle( node ),
+                Action::Open( key, pin ) => self.on_open_file( ui.ctx(), key, pin ),
+                Action::Export( key, export ) => self.on_export_file( key, export ),
+                Action::CloseArchive( archive ) => self.on_close_archive( archive ),
             }
         }
 
-        let row_height = ui.spacing().interact_size.y;
-        let pitch      = row_height + ui.spacing().item_spacing.y;
-        let mut area   = ScrollArea::vertical().auto_shrink( false );
+        list.min.y
+    }
 
-        if std::mem::take( &mut self.scroll_to_selected )
-            && let Some( position ) = self.selected.and_then( |index| self.visible.iter().position( |&visible| visible == index ) )
+    fn tree_list( &mut self, ui: &mut egui::Ui ) -> Vec<Action>
+    {
+        let palette  = self.palette;
+        let current  = self.active_tab().map( |tab| tab.key );
+        let mut area = ScrollArea::vertical().id_salt( "tree" ).auto_shrink( false );
+
+        if let Some( row ) = self.scroll_to_row.take()
         {
-            let top = to_f32( position ) * pitch;
+            let top = to_f32( row ) * ( ROW_HEIGHT + ROW_GAP );
             if top < self.list_offset
             {
                 area = area.vertical_scroll_offset( top );
             }
-            else if top + pitch > self.list_offset + self.list_height
+            else if top + ROW_HEIGHT > self.list_offset + self.list_height
             {
-                area = area.vertical_scroll_offset( top + pitch - self.list_height );
+                area = area.vertical_scroll_offset( top + ROW_HEIGHT - self.list_height );
             }
         }
 
-        let mut clicked = None;
-
+        let mut actions = Vec::new();
         let output = area.show_rows(
             ui,
-            row_height,
-            self.visible.len(),
-            |ui, rows|
+            ROW_HEIGHT,
+            self.rows.len(),
+            |ui, range|
             {
-                for &index in &self.visible[ rows ]
+                for row in &self.rows[ range ]
                 {
-                    let entry = &self.entries[ index ];
-                    let label = ui.selectable_label( self.selected == Some( index ), &entry.path );
-                    if label.on_hover_text( format!( "{} байт", entry.size ) ).clicked()
+                    let indent = widgets::row_indent( row.depth );
+                    let response = match row.kind
                     {
-                        clicked = Some( index );
-                    }
+                        RowKind::Archive | RowKind::Folder =>
+                        {
+                            widgets::tree_row( ui, palette, indent, RowIcon::Chevron( row.expanded ), &row.label, row.depth == 0, false )
+                        }
+                        RowKind::File( key, _ ) =>
+                        {
+                            widgets::tree_row( ui, palette, indent, RowIcon::Image( file_icon( &row.label ) ), &row.label, false, current == Some( key ) )
+                        }
+                    };
+                    actions.extend( row_action( row, &response ) );
+                    actions.extend( file_menu( &response, palette, row ) );
+                    actions.extend( archive_menu( &response, palette, row ) );
                 }
             }
         );
         self.list_offset = output.state.clamped_offset().y;
         self.list_height = output.inner_rect.height();
-        if let Some( index ) = clicked
+
+        actions
+    }
+
+    fn tree_grid( &mut self, ui: &mut egui::Ui ) -> Vec<Action>
+    {
+        let palette = self.palette;
+        let current = self.active_tab().map( |tab| tab.key );
+        let width   = ui.available_width();
+        let columns = ( ( width + CARD_GAP ) / ( CARD_SIZE.x + CARD_GAP ) ).floor().max( 1.0 );
+
+        // Taken out while drawing so thumbnails can be cached on `self`.
+        let rows = std::mem::take( &mut self.rows );
+        let mut lines: Vec<GridLine> = Vec::new();
+        for row in &rows
         {
-            self.on_select( ui.ctx(), index );
+            match row.kind
+            {
+                RowKind::Archive | RowKind::Folder => lines.push( GridLine::Header( row ) ),
+                RowKind::File( .. ) => match lines.last_mut()
+                {
+                    Some( GridLine::Cards( cards ) ) if to_f32( cards.len() ) < columns && cards[ 0 ].depth == row.depth => cards.push( row ),
+                    _ => lines.push( GridLine::Cards( vec![ row ] ) ),
+                },
+            }
+        }
+
+        let mut budget       = THUMBS_PER_FRAME;
+        let mut model_budget = MODEL_THUMBS_PER_FRAME;
+        let mut pending      = false;
+        let mut actions      = Vec::new();
+        let ctx              = ui.ctx().clone();
+
+        ScrollArea::vertical().id_salt( "grid" ).auto_shrink( false ).show_viewport(
+            ui,
+            |ui, viewport|
+            {
+                let origin = ui.max_rect().min;
+                let mut y  = 0.0;
+
+                for line in &lines
+                {
+                    let height = match line
+                    {
+                        GridLine::Header( _ ) => ROW_HEIGHT,
+                        GridLine::Cards( _ ) => CARD_SIZE.y,
+                    };
+                    let line_rect = Rect::from_min_size( origin + Vec2::new( 0.0, y ), Vec2::new( width, height ) );
+
+                    y += height + ROW_GAP;
+                    if line_rect.max.y < origin.y + viewport.min.y || line_rect.min.y > origin.y + viewport.max.y
+                    {
+                        continue;
+                    }
+
+                    let mut child = ui.new_child( UiBuilder::new().max_rect( line_rect ).layout( Layout::left_to_right( Align::Min ) ) );
+
+                    match line
+                    {
+                        GridLine::Header( row ) =>
+                        {
+                            let indent   = widgets::row_indent( row.depth );
+                            let response = widgets::tree_row( &mut child, palette, indent, RowIcon::Chevron( row.expanded ), &row.label, row.depth == 0, false );
+                            actions.extend( row_action( row, &response ) );
+                            actions.extend( archive_menu( &response, palette, row ) );
+                        }
+                        GridLine::Cards( cards ) =>
+                        {
+                            child.add_space( 20.0 * to_f32( cards[ 0 ].depth.saturating_sub( 1 ) ) );
+                            child.spacing_mut().item_spacing.x = CARD_GAP;
+                            for row in cards
+                            {
+                                let RowKind::File( key, kind ) = row.kind else { continue };
+                                let wanted = match kind
+                                {
+                                    Kind::Texture => Some( &mut budget ),
+                                    Kind::Model if self.render_state.is_some() => Some( &mut model_budget ),
+                                    _ => None,
+                                };
+                                if let Some( left ) = wanted
+                                    && !self.thumbnails.contains_key( &key )
+                                {
+                                    if *left > 0
+                                    {
+                                        *left -= 1;
+                                        let thumb = self.load_thumbnail( &ctx, key, kind );
+                                        self.thumbnails.insert( key, thumb );
+                                    }
+                                    else
+                                    {
+                                        pending = true;
+                                    }
+                                }
+                                let thumb    = self.thumbnails.get( &key ).and_then( Option::as_ref );
+                                let response = card( &mut child, palette, &row.label, thumb, current == Some( key ) );
+                                actions.extend( row_action( row, &response ) );
+                                actions.extend( file_menu( &response, palette, row ) );
+                            }
+                        }
+                    }
+                }
+                ui.allocate_space( Vec2::new( width, y ) );
+            }
+        );
+
+        drop( lines );
+        self.rows = rows;
+        if pending
+        {
+            ctx.request_repaint();
+        }
+
+        actions
+    }
+
+    fn load_thumbnail( &self, ctx: &egui::Context, key: FileKey, kind: Kind ) -> Option<Thumbnail>
+    {
+        let ( archive, entry ) = self.library.entry( key )?;
+        let data = archive.vfs.read_entry( entry ).ok()?;
+
+        match kind
+        {
+            Kind::Texture => texture_viewer::thumbnail( ctx, &entry.path, &data, 64 ).map( Thumbnail::Image ),
+            Kind::Model if crate::preview::has_extension( &entry.path, mormesh::EXTENSION ) =>
+            {
+                let state     = self.render_state.as_ref()?;
+                let find_file = |name: &str| self.library.read_by_name( name );
+                model_viewer::thumbnail( state, &data, &find_file, MODEL_THUMB_PIXELS ).map( Thumbnail::Model )
+            }
+            _ => None,
         }
     }
 
-    fn content( &mut self, ui: &mut egui::Ui )
+    /// Tabs share the search row; the panel below starts at `panel_top` whether tabs exist or not.
+    fn main_view( &mut self, ui: &mut egui::Ui, panel_top: f32 )
     {
-        let Some( current ) = &mut self.current else
+        let palette = self.palette;
+        let rect    = ui.max_rect();
+        let panel   = Rect::from_min_max( Pos2::new( rect.min.x, panel_top ), rect.max );
+        ui.painter().rect( panel, CornerRadius::same( theme::PANEL_RADIUS ), palette.view, Stroke::new( 1.0, palette.border ), StrokeKind::Inside );
+
+        let tabs_top  = rect.min.y + ( ( panel_top - SEARCH_GAP - rect.min.y - TABS_HEIGHT ) / 2.0 ).max( 0.0 );
+        let arrows    = if self.tabs_overflow { 2.0 * ( TABS_HEIGHT + MAIN_PADDING ) } else { 0.0 };
+        let tabs_rect = Rect::from_min_size( Pos2::new( rect.min.x, tabs_top ), Vec2::new( rect.width() - arrows, TABS_HEIGHT ) );
+        let body      = panel.shrink( 1.0 + MAIN_PADDING );
+
+        let mut scroll = None;
+
+        if self.tabs_overflow
         {
-            ui.centered_and_justified( |ui| ui.label( "Выберите файл слева" ) );
-            return;
+            let next = Rect::from_min_size( Pos2::new( rect.max.x - TABS_HEIGHT, tabs_top ), Vec2::splat( TABS_HEIGHT ) );
+            let prev = next.translate( Vec2::new( -( TABS_HEIGHT + MAIN_PADDING ), 0.0 ) );
+            if widgets::scroll_button( ui, palette, prev, true ).clicked()
+            {
+                scroll = Some( TABS_SCROLL_STEP );
+            }
+            if widgets::scroll_button( ui, palette, next, false ).clicked()
+            {
+                scroll = Some( -TABS_SCROLL_STEP );
+            }
+        }
+
+        let mut tabs_ui = ui.new_child( UiBuilder::new().max_rect( tabs_rect ).layout( Layout::left_to_right( Align::Center ) ) );
+        tabs_ui.set_clip_rect( tabs_rect );
+        let strip  = ( self.active, self.tabs.len(), self.tabs_overflow );
+        let reveal = self.revealed_tab != Some( strip );
+
+        let mut action = None;
+        let tabs_area  = ScrollArea::horizontal().id_salt( "tabs" ).scroll_bar_visibility( egui::scroll_area::ScrollBarVisibility::AlwaysHidden );
+        let tabs_output = tabs_area.show(
+            &mut tabs_ui,
+            |ui|
+            {
+                if let Some( delta ) = scroll
+                {
+                    ui.scroll_with_delta( Vec2::new( delta, 0.0 ) );
+                }
+                ui.spacing_mut().item_spacing.x = MAIN_PADDING;
+                for ( index, tab ) in self.tabs.iter().enumerate()
+                {
+                    let close    = |painter: &egui::Painter, center: Pos2, color| self.title_bar.paint_close( painter, center, widgets::ICON_SIZE, color );
+                    let response = widgets::tab( ui, palette, file_icon( &tab.name ), &tab.name, self.active == Some( index ), !tab.pinned, close );
+                    if reveal && self.active == Some( index )
+                    {
+                        ui.scroll_to_rect( response.response.rect, None );
+                    }
+
+                    if let Some( menu_action ) = tab_menu( &response.response, palette, index, &tab.name )
+                    {
+                        action = Some( menu_action );
+                    }
+                    else if response.closed
+                    {
+                        action = Some( TabAction::Close( index ) );
+                    }
+                    else if response.double_clicked
+                    {
+                        action = Some( TabAction::Pin( index ) );
+                    }
+                    else if response.clicked
+                    {
+                        action = Some( TabAction::Activate( index ) );
+                    }
+                }
+            }
+        );
+        self.revealed_tab = Some( strip );
+
+        let overflow = tabs_output.content_size.x > rect.width();
+        if overflow != self.tabs_overflow
+        {
+            self.tabs_overflow = overflow;
+            ui.ctx().request_repaint();
+        }
+
+        match action
+        {
+            Some( TabAction::Activate( index ) ) => self.active = Some( index ),
+            Some( TabAction::Pin( index ) ) =>
+            {
+                self.active = Some( index );
+                self.tabs[ index ].pinned = true;
+            }
+            Some( TabAction::Close( index ) ) => self.on_close_tab( index ),
+            Some( TabAction::CloseOthers( index ) ) => self.on_close_others( index ),
+            Some( TabAction::Export( index, export ) ) => self.on_export_tab( index, export ),
+            None => {}
+        }
+
+        let mut body_ui = ui.new_child( UiBuilder::new().max_rect( body ) );
+        body_ui.set_clip_rect( body );
+        let checker = &self.checker;
+        let error = match self.active.and_then( |index| self.tabs.get_mut( index ) )
+        {
+            Some( tab ) => tab.viewer.show( &mut body_ui, palette, checker, &tab.data ),
+            None =>
+            {
+                let hint = if self.library.archives.is_empty() { t!( "blank.open_folder" ) } else { t!( "blank.select_file" ) };
+                viewer::show_blank( &mut body_ui, palette, &hint );
+                None
+            }
+        };
+        if error.is_some()
+        {
+            self.message = error;
+        }
+    }
+
+    fn status_bar( &self, ui: &mut egui::Ui )
+    {
+        let palette = self.palette;
+
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let text = |ui: &mut egui::Ui, text: &str|
+        {
+            ui.label( egui::RichText::new( text ).size( theme::STATUS_TEXT_SIZE ).color( palette.text ) );
         };
 
-        let mut save_png = false;
-        let mut error    = None;
+        let mut segments: Vec<String> = Vec::new();
 
-        match ( &current.preview, &mut current.view )
+        match self.active_tab().and_then( |tab| self.library.entry( tab.key ).map( |( archive, _ )| ( tab, archive ) ) )
         {
-            ( Preview::Texture( texture ), Some( View::Texture( view ) ) ) =>
+            Some( ( tab, archive ) ) =>
             {
-                let controls = texture_controls( ui, texture, view, &current.data );
-                save_png = controls.save_png;
-                if controls.redecode
-                {
-                    error = view.redecode( ui.ctx(), texture ).err();
-                }
-                texture_canvas( ui, view, &self.checker );
+                segments.push( archive.name.clone() );
+                segments.push( tab.name.clone() );
+                segments.push( i18n::count( "status.bytes", tab.data.len() ) );
             }
-            ( Preview::Font( font ), Some( View::Font( view ) ) ) => font_view( ui, font, view, current.data.len() ),
-            ( Preview::Text( text ), _ ) =>
-            {
-                ScrollArea::both().auto_shrink( false ).show(
-                    ui,
-                    |ui|
-                    {
-                        ui.add( TextEdit::multiline( &mut text.as_str() ).code_editor().desired_width( f32::INFINITY ) );
-                    }
-                );
-            }
-            ( Preview::Texture( _ ) | Preview::Font( _ ) | Preview::Binary, _ ) =>
-            {
-                if MODEL_EXTENSIONS.iter().any( |ext| preview::has_extension( &current.path, ext ) )
-                {
-                    ui.label( RichText::new( "Формат моделей пока не поддерживается парсерами — показан hex." ).weak() );
-                }
-                hex_view( ui, &current.data );
-            }
+            None if !self.library.archives.is_empty() => segments.push( i18n::count( "status.archives", self.library.archives.len() ) ),
+            None => {}
         }
-        if let Some( err ) = error
+        segments.extend( self.message.clone() );
+        for ( index, segment ) in segments.iter().enumerate()
         {
-            self.status = err;
-        }
-        if save_png
-        {
-            self.on_save_png();
+            if index > 0
+            {
+                widgets::status_separator( ui, palette );
+            }
+            text( ui, segment );
         }
     }
-}
 
-struct ControlsResult
-{
-    redecode: bool,
-    save_png: bool,
-}
-
-fn texture_controls( ui: &mut egui::Ui, texture: &Texture, view: &mut TextureView, data: &[u8] ) -> ControlsResult
-{
-    let mut result = ControlsResult { redecode: false, save_png: false };
-
-    let info = format!(
-        "{:?} · {}×{} · мипов: {} · граней: {} · {} байт",
-        texture.format(),
-        texture.width(),
-        texture.height(),
-        texture.mip_count(),
-        texture.face_count(),
-        data.len(),
-    );
-    ui.label( info );
-    ui.horizontal(
-        |ui|
-        {
-            if texture.is_cubemap()
-            {
-                const FACES: [&str; 6] = [ "+X", "−X", "+Y", "−Y", "+Z", "−Z" ];
-
-                ui.label( "Грань" );
-                for ( face, name ) in ( 0.. ).zip( FACES )
-                {
-                    result.redecode |= ui.selectable_value( &mut view.face, face, name ).changed();
-                }
-                ui.separator();
-            }
-            if texture.mip_count() > 1
-            {
-                ui.label( "Мип" );
-                let mip = egui::Slider::new( &mut view.mip, 0..=texture.mip_count() - 1 );
-                result.redecode |= ui.add( mip ).changed();
-                ui.label( format!( "{}×{}", view.image.width, view.image.height ) );
-                ui.separator();
-            }
-            for channels in Channels::ALL
-            {
-                result.redecode |= ui.selectable_value( &mut view.channels, channels, channels.label() ).changed();
-            }
-            ui.separator();
-            let zoom = egui::Slider::new( &mut view.zoom, ZOOM_MIN..=ZOOM_MAX ).logarithmic( true ).text( "масштаб" );
-            if ui.add( zoom ).changed()
-            {
-                view.fit = false;
-            }
-            if ui.button( "Вписать" ).clicked()
-            {
-                view.fit = true;
-            }
-            if ui.button( "1:1" ).clicked()
-            {
-                view.fit = false;
-                view.zoom = 1.0;
-            }
-            ui.separator();
-            result.save_png = ui.button( "Сохранить PNG…" ).clicked();
-        }
-    );
-    ui.separator();
-
-    result
-}
-
-fn texture_canvas( ui: &mut egui::Ui, view: &mut TextureView, checker: &TextureHandle )
-{
-    let image_size = view.handle.size_vec2();
-
-    if view.fit
+    fn preferences( &mut self, ctx: &egui::Context )
     {
-        let available = ui.available_size() - Vec2::splat( ui.spacing().scroll.bar_width * 2.0 );
-        view.zoom = ( available.x / image_size.x ).min( available.y / image_size.y ).clamp( ZOOM_MIN, FIT_MAX );
+        let Some( mut page ) = self.preferences else { return };
+        let renderer = match &self.render_state
+        {
+            Some( state ) =>
+            {
+                let info = state.adapter.get_info();
+                format!( "{} ({:?})", info.name, info.backend )
+            }
+            None => "OpenGL".to_owned(),
+        };
+        let language  = self.settings.language;
+        let game_data = self.settings.game_data.clone();
+        let open      = settings::show( ctx, self.palette, &mut self.settings, &mut page, &AboutInfo { renderer } );
+        self.preferences = open.then_some( page );
+        if self.settings.language != language
+        {
+            i18n::apply( self.settings.language );
+        }
+        if self.settings.game_data != game_data
+            && let Some( dir ) = self.settings.game_data.clone()
+        {
+            self.on_open_folder( &dir );
+        }
+        if ctx.zoom_factor() != self.settings.ui_scale
+        {
+            ctx.set_zoom_factor( self.settings.ui_scale );
+        }
     }
 
-    let hovered    = ui.rect_contains_pointer( ui.available_rect_before_wrap() );
-    let zoom_delta = ui.input( |input| input.zoom_delta() );
-    if hovered && zoom_delta != 1.0
+    /// Applies a theme picked in the settings or, for the system one, changed in the OS.
+    fn apply_theme( &mut self, ctx: &egui::Context )
     {
-        view.zoom = ( view.zoom * zoom_delta ).clamp( ZOOM_MIN, ZOOM_MAX );
-        view.fit = false;
+        let palette = self.settings.theme.palette( ctx.system_theme() );
+        if palette.theme != self.palette.theme
+        {
+            theme::apply_palette( ctx, palette );
+            self.palette = palette;
+            ctx.request_repaint();
+        }
     }
 
-    let size = image_size * view.zoom;
-
-    ScrollArea::both().auto_shrink( false ).show(
-        ui,
-        |ui|
+    fn window_border( &self, ctx: &egui::Context )
+    {
+        let expanded = ctx.input( |input| input.viewport().maximized.unwrap_or( false ) || input.viewport().fullscreen.unwrap_or( false ) );
+        // Windows draws its own 1 px frame with rounded corners around the borderless window, macOS keeps a native one.
+        if expanded || cfg!( any( windows, target_os = "macos" ) )
         {
-            let ( rect, _ ) = ui.allocate_exact_size( size, Sense::hover() );
-            let painter    = ui.painter();
-            let checker_uv = Rect::from_min_size( Pos2::ZERO, size / ( CHECKER_CELL * 2.0 ) );
-            painter.image( checker.id(), rect, checker_uv, Color32::WHITE );
-            let full_uv = Rect::from_min_max( Pos2::ZERO, Pos2::new( 1.0, 1.0 ) );
-            painter.image( view.handle.id(), rect, full_uv, Color32::WHITE );
+            return;
         }
-    );
+        let painter = ctx.layer_painter( egui::LayerId::new( egui::Order::Foreground, egui::Id::unique( "window_border" ) ) );
+        // One physical pixel: the design's 1.3 smears over two.
+        let width = 1.0 / ctx.pixels_per_point();
+        painter.rect_stroke( ctx.viewport_rect(), 0.0, Stroke::new( width, self.palette.window_border ), StrokeKind::Inside );
+    }
+
+    fn shortcuts( &mut self, ctx: &egui::Context )
+    {
+        if ctx.memory( |memory| memory.focused().is_some() )
+        {
+            return;
+        }
+        let ( up, down, close, preferences ) = ctx.input(
+            |input|
+            {
+                let command = input.modifiers.command;
+                ( input.key_pressed( Key::ArrowUp ), input.key_pressed( Key::ArrowDown ), command && input.key_pressed( Key::W ), command && input.key_pressed( Key::Comma ) )
+            }
+        );
+
+        if preferences
+        {
+            self.preferences = Some( Page::General );
+        }
+        if up || down
+        {
+            self.on_step_selection( ctx, down );
+        }
+        if close && let Some( index ) = self.active
+        {
+            self.on_close_tab( index );
+        }
+    }
 }
 
-fn font_view( ui: &mut egui::Ui, font: &Font, view: &mut FontView, size: usize )
+/// egui's menu style with the title bar buttons of the design: padding 4 by 2, 4 apart.
+fn title_menu_style( style: &mut egui::Style )
 {
-    let info = format!(
-        "глифов: {} · пар кернинга: {} · высота строки: {} · высота глифа: {} · {size} байт",
-        font.glyphs().len(),
-        font.kerning_pairs().len(),
-        font.line_height(),
-        font.glyph_height(),
-    );
-    ui.label( info );
-    ui.horizontal(
+    egui::containers::menu::menu_style( style );
+    style.spacing.button_padding = Vec2::new( 4.0, 2.0 );
+    style.spacing.item_spacing.x = 4.0;
+}
+
+/// `None` when the dialog is cancelled.
+fn save_raw_as( name: &str, data: &[u8] ) -> Option<String>
+{
+    let target = rfd::FileDialog::new().set_file_name( name ).save_file()?;
+    let result = std::fs::write( &target, data ).map_err( |err| err.to_string() );
+
+    Some( saved_message( &target, result ) )
+}
+
+/// `None` when the dialog is cancelled.
+fn save_png_as( name: &str, export: impl FnOnce( &Path ) -> Result<(), String> ) -> Option<String>
+{
+    let stem   = name.rsplit_once( '.' ).map_or( name, |( stem, _ )| stem );
+    let dialog = rfd::FileDialog::new().add_filter( "PNG", &[ "png" ] ).set_file_name( format!( "{stem}.png" ) );
+    let target = dialog.save_file()?;
+    let result = export( &target );
+
+    Some( saved_message( &target, result ) )
+}
+
+fn saved_message( target: &Path, result: Result<(), String> ) -> String
+{
+    match result
+    {
+        Ok( () ) => t!( "status.saved", path = target.display() ).into_owned(),
+        Err( err ) => format!( "{}: {err}", target.display() ),
+    }
+}
+
+/// `None` when the dialog is cancelled. `.gltf` or `.glb` is picked by the extension the user saves with.
+/// Meshes convert from `data`; scenes read their actors, meshes and textures from the open archives.
+fn save_gltf_as( name: &str, data: &[u8], library: &Library ) -> Option<String>
+{
+    let stem   = name.rsplit_once( '.' ).map_or( name, |( stem, _ )| stem );
+    let dialog = rfd::FileDialog::new()
+        .add_filter( "glTF binary", &[ "glb" ] )
+        .add_filter( "glTF", &[ "gltf" ] )
+        .set_file_name( format!( "{stem}.glb" ) );
+    let target = dialog.save_file()?;
+    let read   = |file: &str| library.read_by_name( file ).map( |( _, data )| data );
+    let png    = |texture: &str|
+    {
+        let ( path, data ) = library.read_by_name( texture )?;
+        let image = texture_viewer::decode( &path, &data ).ok()?;
+
+        texture_viewer::encode_png( &image ).ok()
+    };
+
+    let exported = match crate::preview::kind_of( name )
+    {
+        Kind::Scene => Scene::load( name, read ).map( |scene| morscene::gltf::export( &scene, stem, read, read, png ).gltf ).map_err( |err| err.to_string() ),
+        _ => Mesh::parse( data ).map( |mesh| Gltf::from_mesh( &mesh, stem, png ) ).map_err( |err| err.to_string() ),
+    };
+    let result = exported.and_then( |gltf| gltf::save( &gltf, &target ) );
+
+    Some( saved_message( &target, result ) )
+}
+
+/// Raw bytes for every file, plus the conversion its type has.
+fn export_items( ui: &mut egui::Ui, name: &str ) -> Option<Export>
+{
+    let mut chosen = None;
+
+    for export in std::iter::once( Export::Raw ).chain( Export::conversion( name ) )
+    {
+        if ui.button( t!( export.label() ) ).clicked()
+        {
+            chosen = Some( export );
+        }
+    }
+
+    chosen
+}
+
+fn archive_menu( response: &egui::Response, palette: &Palette, row: &Row ) -> Option<Action>
+{
+    let ( RowKind::Archive, Some( node ) ) = ( &row.kind, &row.node ) else { return None };
+    let mut action = None;
+
+    response.context_menu(
         |ui|
         {
-            let scale = egui::Slider::new( &mut view.scale, FONT_SCALE_MIN..=FONT_SCALE_MAX ).step_by( 1.0 ).text( "масштаб" );
-            ui.add( scale );
+            widgets::menu_visuals( ui, palette );
+            if ui.button( t!( "context.close_archive" ) ).clicked()
+            {
+                action = Some( Action::CloseArchive( node.archive ) );
+            }
         }
     );
-    ui.separator();
 
-    let tint    = ui.visuals().strong_text_color();
-    let full_uv = Rect::from_min_max( Pos2::ZERO, Pos2::new( 1.0, 1.0 ) );
+    action
+}
 
-    ScrollArea::vertical().auto_shrink( false ).show(
-        ui,
+fn file_menu( response: &egui::Response, palette: &Palette, row: &Row ) -> Option<Action>
+{
+    let RowKind::File( key, _ ) = row.kind else { return None };
+    let mut action = None;
+
+    response.context_menu(
         |ui|
         {
-            let ( rect, _ ) = ui.allocate_exact_size( view.sample.size_vec2() * view.scale, Sense::hover() );
-            ui.painter().image( view.sample.id(), rect, full_uv, tint );
+            widgets::menu_visuals( ui, palette );
+            if ui.button( t!( "context.open" ) ).clicked()
+            {
+                action = Some( Action::Open( key, true ) );
+            }
             ui.separator();
-            ui.horizontal_wrapped(
-                |ui|
-                {
-                    for ( ( ch, glyph ), handle ) in font.glyphs().zip( &view.glyphs )
-                    {
-                        glyph_cell( ui, ch, glyph, handle.as_ref(), view, tint );
-                    }
-                }
-            );
+            if let Some( export ) = export_items( ui, &row.label )
+            {
+                action = Some( Action::Export( key, export ) );
+            }
         }
     );
+
+    action
 }
 
-fn glyph_cell( ui: &mut egui::Ui, ch: char, glyph: &Glyph, handle: Option<&TextureHandle>, view: &FontView, tint: Color32 )
+fn tab_menu( response: &egui::Response, palette: &Palette, index: usize, name: &str ) -> Option<TabAction>
 {
-    let code = u32::from( ch );
+    let mut action = None;
 
-    let response = ui.vertical(
+    response.context_menu(
         |ui|
         {
-            let mut size = view.cell * view.scale;
-            size.x = size.x.max( GLYPH_CELL_MIN_WIDTH );
-            let ( rect, _ ) = ui.allocate_exact_size( size, Sense::hover() );
-            let painter = ui.painter();
-            painter.rect_stroke( rect, 0.0, Stroke::new( 1.0, ui.visuals().weak_text_color() ), StrokeKind::Inside );
-            if let Some( handle ) = handle
+            widgets::menu_visuals( ui, palette );
+            if ui.button( t!( "context.close" ) ).clicked()
             {
-                let glyph_rect = Rect::from_center_size( rect.center(), handle.size_vec2() * view.scale );
-                let full_uv    = Rect::from_min_max( Pos2::ZERO, Pos2::new( 1.0, 1.0 ) );
-                painter.image( handle.id(), glyph_rect.round_to_pixels( painter.pixels_per_point() ), full_uv, tint );
+                action = Some( TabAction::Close( index ) );
             }
-            ui.label( RichText::new( format!( "{code:04X}" ) ).monospace().small() );
+            if ui.button( t!( "context.close_others" ) ).clicked()
+            {
+                action = Some( TabAction::CloseOthers( index ) );
+            }
+            ui.separator();
+            if let Some( export ) = export_items( ui, name )
+            {
+                action = Some( TabAction::Export( index, export ) );
+            }
         }
     );
 
-    let hint = format!(
-        "{ch:?} U+{code:04X} · {}×{} · смещение {}, {} · шаг {}",
-        glyph.width, glyph.height, glyph.offset_x, glyph.offset_y, glyph.advance,
-    );
-    response.response.on_hover_text( hint );
+    action
 }
 
-fn hex_view( ui: &mut egui::Ui, data: &[u8] )
+fn file_icon( name: &str ) -> egui::ImageSource<'static>
 {
-    let row_height = ui.text_style_height( &TextStyle::Monospace );
-    let rows       = data.len().div_ceil( preview::HEX_ROW );
+    match crate::preview::kind_of( name )
+    {
+        Kind::Texture | Kind::Map => icons::TEXTURE,
+        Kind::Font => icons::FONT,
+        Kind::Text => icons::TEXT,
+        Kind::Scene if crate::preview::has_extension( name, morscene::OUTDOOR_EXTENSION ) => icons::WORLD,
+        Kind::Scene => icons::INTERIOR,
+        Kind::Model => icons::MESH,
+        Kind::Binary if crate::preview::has_extension( name, crate::preview::PATH_EXTENSION ) => icons::PATH,
+        Kind::Audio => icons::AUDIO,
+        Kind::Binary => icons::BINARY,
+    }
+}
 
-    ScrollArea::both().auto_shrink( false ).show_rows(
-        ui,
-        row_height,
-        rows,
-        |ui, range|
+fn row_action( row: &Row, response: &egui::Response ) -> Option<Action>
+{
+    match ( &row.kind, &row.node )
+    {
+        ( RowKind::File( key, _ ), _ ) if response.double_clicked() => Some( Action::Open( *key, true ) ),
+        ( RowKind::File( key, _ ), _ ) if response.clicked() => Some( Action::Open( *key, false ) ),
+        ( _, Some( node ) ) if response.clicked() => Some( Action::Toggle( node.clone() ) ),
+        _ => None,
+    }
+}
+
+/// Thumbnail card: preview or type icon, file name below in up to two lines.
+fn card( ui: &mut egui::Ui, palette: &Palette, label: &str, thumb: Option<&Thumbnail>, selected: bool ) -> egui::Response
+{
+    let ( rect, response ) = ui.allocate_exact_size( CARD_SIZE, Sense::click() );
+    let painter = ui.painter();
+    if selected || response.hovered()
+    {
+        painter.rect_filled( rect, CornerRadius::same( theme::CONTROL_RADIUS ), palette.border );
+    }
+
+    let slot = Rect::from_min_size( rect.min + Vec2::splat( 4.0 ), Vec2::splat( THUMB_SIZE ) );
+
+    match thumb
+    {
+        Some( thumb ) =>
         {
-            for row in range
-            {
-                ui.label( RichText::new( preview::hex_row( data, row ) ).monospace() );
-            }
+            let size    = thumb.size();
+            let fitted  = size * ( THUMB_SIZE / size.x.max( size.y ) );
+            let uv      = Rect::from_min_max( Pos2::ZERO, Pos2::new( 1.0, 1.0 ) );
+            let preview = egui::epaint::RectShape::filled( Rect::from_center_size( slot.center(), fitted ), CornerRadius::same( 2 ), egui::Color32::WHITE );
+            painter.add( preview.with_texture( thumb.id(), uv ) );
         }
-    );
+        None => widgets::paint_icon( ui, file_icon( label ), Rect::from_center_size( slot.center(), Vec2::splat( 20.0 ) ), palette.text_weak ),
+    }
+
+    let font    = FontId::proportional( theme::CAPTION_TEXT_SIZE );
+    let mut top = slot.max.y + 4.0;
+    for line in widgets::card_lines( painter, label, &font, CARD_SIZE.x - 4.0 )
+    {
+        let galley = painter.layout_no_wrap( line, font.clone(), palette.text );
+        let height = galley.size().y;
+        painter.galley( Pos2::new( rect.center().x - ( galley.size().x / 2.0 ), top ), galley, palette.text );
+        top += height;
+    }
+
+    response.on_hover_text( label )
 }
 
 impl eframe::App for ViewerApp
 {
+    fn save( &mut self, storage: &mut dyn eframe::Storage )
+    {
+        eframe::set_value( storage, settings::STORAGE_KEY, &self.settings );
+    }
+
     fn ui( &mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame )
     {
-        egui::Panel::top( "toolbar" ).show( ui, |ui| self.toolbar( ui ) );
-        egui::Panel::bottom( "status" ).show( ui, |ui| ui.label( &self.status ) );
-        egui::Panel::left( "files" ).resizable( true ).default_size( 320.0 ).show( ui, |ui| self.file_list( ui ) );
-        egui::CentralPanel::default().show( ui, |ui| self.content( ui ) );
+        let ctx = ui.ctx().clone();
+        self.apply_theme( &ctx );
+
+        let palette = self.palette;
+        self.shortcuts( &ctx );
+
+        egui::Panel::top( "title_bar" )
+            .exact_size( title_bar::HEIGHT )
+            .show_separator_line( false )
+            .frame( egui::Frame::NONE.fill( palette.window ) )
+            .show(
+                ui,
+                |ui|
+                {
+                    let mut row = self.title_bar.show( ui );
+                    self.menu( &mut row );
+                }
+            );
+        egui::Panel::bottom( "status" )
+            .exact_size( STATUS_HEIGHT )
+            .show_separator_line( false )
+            .frame( egui::Frame::NONE.fill( palette.window ).inner_margin( egui::Margin::symmetric( 8, 0 ) ) )
+            .show( ui, |ui| ui.horizontal_centered( |ui| self.status_bar( ui ) ) );
+        egui::CentralPanel::default()
+            .frame( egui::Frame::NONE.fill( palette.window ).inner_margin( egui::Margin::symmetric( 4, 0 ) ) )
+            .show(
+                ui,
+                |ui|
+                {
+                    let rect = ui.max_rect();
+                    self.sidebar_width = self.sidebar_width.clamp( SIDEBAR_MIN, ( rect.width() * 0.6 ).max( SIDEBAR_MIN ) );
+                    let sidebar  = Rect::from_min_size( rect.min, Vec2::new( self.sidebar_width, rect.height() ) );
+                    let splitter = Rect::from_min_max( Pos2::new( sidebar.max.x, rect.min.y ), Pos2::new( sidebar.max.x + GUTTER, rect.max.y ) );
+                    let main     = Rect::from_min_max( Pos2::new( splitter.max.x, rect.min.y ), rect.max );
+
+                    let drag = ui.interact( splitter, ui.scope_id().with( "splitter" ), Sense::drag() );
+                    if drag.hovered() || drag.dragged()
+                    {
+                        ui.ctx().set_cursor_icon( CursorIcon::ResizeHorizontal );
+                    }
+                    self.sidebar_width += drag.drag_delta().x;
+
+                    let panel_top = self.sidebar( &mut ui.new_child( UiBuilder::new().max_rect( sidebar ) ) );
+                    self.main_view( &mut ui.new_child( UiBuilder::new().max_rect( main ) ), panel_top );
+                }
+            );
+
+        self.preferences( &ctx );
+        self.window_border( &ctx );
+        title_bar::resize_edges( &ctx );
     }
 }
