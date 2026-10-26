@@ -3,7 +3,7 @@ use eframe::egui::{
     ResizeDirection, Sense, Stroke, StrokeKind, Vec2, ViewportCommand,
 };
 
-use crate::theme;
+use crate::ui::theme;
 
 pub const HEIGHT: f32 = 25.0;
 
@@ -174,7 +174,7 @@ fn paint_title( ui: &egui::Ui, rect: Rect )
     let galley = ui.painter().layout_no_wrap( TITLE.to_owned(), FontId::proportional( theme::TEXT_SIZE ), color );
     let width  = TITLE_ICON + TITLE_GAP + galley.size().x;
     let icon   = Rect::from_min_size( Pos2::new( rect.center().x - ( width / 2.0 ), rect.center().y - ( TITLE_ICON / 2.0 ) ), Vec2::splat( TITLE_ICON ) );
-    egui::Image::new( crate::icons::APP ).tint( color ).paint_at( ui, icon );
+    egui::Image::new( crate::ui::icons::APP ).tint( color ).paint_at( ui, icon );
     let text = Pos2::new( icon.max.x + TITLE_GAP, rect.center().y - ( galley.size().y / 2.0 ) );
     ui.painter().galley( text, galley, color );
 }

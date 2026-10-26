@@ -8,10 +8,11 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 
 use rust_i18n::t;
-use crate::model_viewer::{ Camera, ModelViewer };
-use crate::scene::{ self, LoadedScene, Progress };
+use crate::render::scene::{ self, LoadedScene, Progress };
 use crate::settings::ViewerSettings;
-use crate::theme::Palette;
+use crate::ui::theme::Palette;
+use crate::viewer::model::ModelViewer;
+use crate::viewer::model::camera::Camera;
 use crate::viewer::Sections;
 
 const PROGRESS_REPAINT: Duration = Duration::from_millis( 100 );

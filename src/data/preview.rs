@@ -3,7 +3,7 @@ use morscene::map::CityMap;
 use mortex::{ Image, Texture };
 
 use rust_i18n::t;
-use crate::model::Model;
+use crate::render::model::Model;
 
 pub const MODEL_EXTENSIONS: [&str; 4] = [ "mesh", "mms", "mma", "lsh" ];
 pub const TEXT_EXTENSIONS:  [&str; 3] = [ "xml", "txt", "json" ];

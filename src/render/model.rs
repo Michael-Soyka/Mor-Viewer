@@ -4,7 +4,7 @@ use std::ops::Range;
 use mormesh::layout::interior::InteriorSurface;
 use mormesh::{ LightmapPage, Material, Mesh, Surface };
 use rust_i18n::t;
-use crate::animation::Skeleton;
+use crate::render::animation::Skeleton;
 
 /// Base color of water under its reflection: nearly black, the game's water shows the reflection and the bed only.
 /// The game sets it from code; picked by eye.

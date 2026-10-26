@@ -6,11 +6,11 @@ use rodio::buffer::SamplesBuffer;
 use rodio::{ DeviceSinkBuilder, MixerDeviceSink, Player };
 
 use rust_i18n::t;
+use crate::data::preview::Audio;
 use crate::i18n;
-use crate::preview::Audio;
-use crate::theme::{ self, Palette };
+use crate::ui::theme::{ self, Palette };
+use crate::ui::widgets::{ self, from_f32, to_f32 };
 use crate::viewer::Sections;
-use crate::widgets::{ self, from_f32, to_f32 };
 
 const PEAK_BUCKETS: usize = 2048;
 const WAVE_PADDING: f32   = 16.0;

@@ -3,7 +3,7 @@ use std::path::{ Path, PathBuf };
 
 use morvfs::{ Entry, Vfs };
 
-use crate::preview::{ self, Kind };
+use crate::data::preview::{ self, Kind };
 
 /// A file inside one of the opened archives.
 #[ derive( Clone, Copy, PartialEq, Eq, Hash, Debug ) ]
