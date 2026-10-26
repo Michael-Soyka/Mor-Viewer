@@ -5,7 +5,8 @@ _version: 1
 menu:
   file: Файл
   open_folder: Открыть папку data…
-  open_archive: Открыть архивы…
+  open_files: Открыть файлы…
+  open_unpacked: Открыть распакованную папку…
   preferences: Настройки…
   exit: Выход
   view: Вид
@@ -23,6 +24,10 @@ context:
 
 sidebar:
   search: Поиск
+
+dialog:
+  game_files: Файлы игры
+  all_files: Все файлы
 
 blank:
   open_folder: 'Откройте папку data игры через меню "Файл"'
@@ -178,6 +183,8 @@ settings:
   show_orientation: Показывать положение в пространстве
   data_folder: Папка data
   data_folder_hint: Не указана. Без неё приложение запускается пустым.
+  load_unpacked: Загружать распакованные папки
+  load_unpacked_hint: Папки рядом с архивами тоже открываются, и их файлы важнее. Папка без архивов открывается целиком.
   browse: Обзор…
   clear: Сбросить
   language: Язык

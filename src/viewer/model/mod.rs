@@ -189,10 +189,7 @@ impl ModelViewer
     {
         self.ambient = ambient.map( |rgb| rgb.map( |channel| ( channel / 255.0 ) * 2.0 ) );
         self.level   = true;
-        // Outdoor scenes fade into haze; interiors are closed rooms.
-        self.options.fog = ambient.is_none();
-        self.defaults = self.options;
-        self.dirty = true;
+        self.dirty   = true;
 
         self
     }
