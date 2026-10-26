@@ -162,6 +162,10 @@ settings:
   about: About
   game: Game
   viewer: Viewer
+  backend: Graphics API
+  backend_hint: A new API takes effect after a restart.
+  vsync: Vertical sync
+  fps_limit: FPS limit
   show_fps: Show FPS
   show_coordinates: Show coordinates
   show_stats: Show scene statistics

@@ -168,6 +168,8 @@ pub struct ViewerApp
     render_state:  Option<eframe::egui_wgpu::RenderState>,
     message:       Option<String>,
 
+    /// When the last frame's UI finished, for the FPS limit.
+    frame_end: Option<Instant>,
 }
 
 impl ViewerApp
@@ -205,6 +207,7 @@ impl ViewerApp
             checker:       texture_viewer::new_checker( &cc.egui_ctx ),
             render_state:  cc.wgpu_render_state.clone(),
             message:       None,
+            frame_end:     None,
         };
 
         if let Some( path ) = start
@@ -926,6 +929,30 @@ impl ViewerApp
         }
     }
 
+    /// The surface keeps its other parameters; the present mode follows the vsync setting.
+    fn apply_vsync( &self, frame: &mut eframe::Frame )
+    {
+        let Some( mut config ) = frame.wgpu_surface_config() else { return };
+        config.present_mode = if self.settings.viewer.vsync { wgpu::PresentMode::AutoVsync } else { wgpu::PresentMode::AutoNoVsync };
+        frame.set_wgpu_surface_config( config );
+    }
+
+    /// Without vsync, waits out what is left of the frame the FPS limit allows.
+    fn limit_fps( &mut self )
+    {
+        let viewer = self.settings.viewer;
+
+        if let Some( last ) = self.frame_end.filter( |_| !viewer.vsync )
+        {
+            let frame = Duration::from_secs_f64( 1.0 / f64::from( viewer.fps_limit.max( 1 ) ) );
+            if let Some( rest ) = frame.checked_sub( last.elapsed() )
+            {
+                std::thread::sleep( rest );
+            }
+        }
+        self.frame_end = Some( Instant::now() );
+    }
+
     /// Applies a theme picked in the settings or, for the system one, changed in the OS.
     fn apply_theme( &mut self, ctx: &egui::Context )
     {
@@ -1207,6 +1234,7 @@ impl eframe::App for ViewerApp
 
     fn ui( &mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame )
     {
+        self.apply_vsync( frame );
         let ctx = ui.ctx().clone();
         self.apply_theme( &ctx );
 
@@ -1257,5 +1285,6 @@ impl eframe::App for ViewerApp
         self.preferences( &ctx );
         self.window_border( &ctx );
         title_bar::resize_edges( &ctx );
+        self.limit_fps();
     }
 }
