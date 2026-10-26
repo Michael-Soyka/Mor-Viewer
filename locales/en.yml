@@ -100,6 +100,7 @@ model:
   render: Render
   no_cull: No face culling
   occlusion: Hide occluded geometry
+  reflections: Reflections
   visible_clusters: "Visible clusters: %{visible} / %{total}"
   drawn_triangles: "Triangles drawn: %{count}"
   frame_time: "%{fps} FPS · %{ms} ms"

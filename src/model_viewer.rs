@@ -165,6 +165,9 @@ struct RenderOptions
     /// Leave out clusters hidden behind others, see [`Culling`].
     occlusion: bool,
 
+    /// Mirror the scene in the water; without, it shows the background, and the frame is drawn once.
+    reflections: bool,
+
 }
 
 impl RenderOptions
@@ -602,6 +605,41 @@ struct Water
 {
     /// The water parts over the reflection.
     surface: wgpu::RenderPipeline,
+
+    /// Front faces as the mirrored view sees them, wound the other way.
+    mirrored: wgpu::RenderPipeline,
+
+    layout:      wgpu::BindGroupLayout,
+    sampler:     wgpu::Sampler,
+    frame:       wgpu::Buffer,
+    frame_group: wgpu::BindGroup,
+    culling:     CullView,
+
+    levels:     Vec<WaterLevel>,
+    reflection: Option<Reflection>,
+}
+
+/// Water parts of one height and the boxes of the clusters they lie in.
+struct WaterLevel
+{
+    height: f32,
+    boxes:  Vec<([f32; 3], [f32; 3])>,
+}
+
+impl WaterLevel
+{
+    /// From `point` to the nearest of the boxes.
+    fn distance( &self, point: [f32; 3] ) -> f32
+    {
+        let to_box = |&( min, max ): &( [f32; 3], [f32; 3] )|
+        {
+            let gap: [f32; 3] = std::array::from_fn( |axis| ( min[ axis ] - point[ axis ] ).max( point[ axis ] - max[ axis ] ).max( 0.0 ) );
+            ( ( gap[ 0 ] * gap[ 0 ] ) + ( gap[ 1 ] * gap[ 1 ] ) + ( gap[ 2 ] * gap[ 2 ] ) ).sqrt()
+        };
+
+        self.boxes.iter().map( to_box ).fold( f32::MAX, f32::min )
+    }
+}
 
 /// The reflection's frame and the bind group the water reads it through.
 struct Reflection
@@ -1423,7 +1461,8 @@ impl Gpu
             let key  = part.texture.as_deref().map( str::to_lowercase );
             let view = key.and_then( |key| views.get( key.as_str() ) ).unwrap_or( &white );
             let lightmap = part.lightmap.and_then( |( index, _ )| baked.get( index ) ).unwrap_or( &neutral );
-            let values   = [ part.color, [ 1.0; 4 ] ];
+            let mirrors  = if part.mirrors { 1.0 } else { 0.0 };
+            let values   = [ part.color, [ 1.0; 4 ], [ part.water.unwrap_or_default(), mirrors, 0.0, 0.0 ] ];
             let color    = buffer( "model part", bytemuck::cast_slice( &values ), wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST );
             let entries =
             [
@@ -1436,6 +1475,26 @@ impl Gpu
             let light = part.lightmap.map( |( _, light )| light );
             parts.push( GpuPart { chunk, light, uniform: color, records, index, water: part.water.is_some(), bind_group } );
         }
+
+        let mut levels = Vec::<WaterLevel>::new();
+
+        for part in &model.parts
+        {
+            let Some( height ) = part.water.filter( |_| part.mirrors ) else { continue };
+            let boxes = part.draws.iter().filter_map( |draw| model.clusters.get( to_usize( draw.cluster ) ) ).map( |cluster| ( cluster.min, cluster.max ) );
+            match levels.iter_mut().find( |level| level.height == height )
+            {
+                Some( level ) => level.boxes.extend( boxes ),
+                None => levels.push( WaterLevel { height, boxes: boxes.collect() } ),
+            }
+        }
+
+        // The reflection is read as the albedo is: a texture and its sampler.
+        let reflection_entries = &part_entries[ ..2 ];
+        let has_water          = model.parts.iter().any( |part| part.water.is_some() );
+        let water              = has_water.then( || Water::new( device, &shader, [ &frame_layout, &part_layout ], reflection_entries, &culling, levels ) );
+        let camera             = culling.view( device );
+
         let gpu = Self
         {
             state: state.clone(),
@@ -1566,6 +1625,20 @@ impl Gpu
         bound
     }
 
+    /// The see-through water over what is drawn so far, when `eye` mirrors it.
+    fn draw_water( &self, render_pass: &mut wgpu::RenderPass, eye: Eye, bound: &mut Option<usize> )
+    {
+        let WaterPass::Mirror( surface, reflection ) = eye.water else { return };
+        render_pass.set_pipeline( surface );
+        render_pass.set_bind_group( 2, reflection, &[] );
+        render_pass.set_index_buffer( self.triangles.slice( .. ), wgpu::IndexFormat::Uint32 );
+
+        for part in self.parts.iter().filter( |part| part.water )
+        {
+            self.draw_part( render_pass, eye, part, false, bound );
+        }
+    }
+
     /// A part's draws, one per cluster; the culled ones have no instances.
     fn draw_part( &self, render_pass: &mut wgpu::RenderPass, eye: Eye, part: &GpuPart, edges: bool, bound: &mut Option<usize> )
     {
@@ -1584,6 +1657,48 @@ impl Gpu
     }
 }
 
+impl Water
+{
+    /// `layouts` are the frame's and the parts'; `reflection_entries` lay out a texture and its sampler.
+    fn new( device: &wgpu::Device, shader: &wgpu::ShaderModule, layouts: [&wgpu::BindGroupLayout; 2], reflection_entries: &[wgpu::BindGroupLayoutEntry], culling: &Culling, levels: Vec<WaterLevel> ) -> Self
+    {
+        let [ frame_layout, part_layout ] = layouts;
+        let layout = device.create_bind_group_layout( &wgpu::BindGroupLayoutDescriptor { label: Some( "reflection" ), entries: reflection_entries } );
+
+        let pipeline_layout = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]|
+        {
+            let descriptor = wgpu::PipelineLayoutDescriptor { label: Some( label ), bind_group_layouts: groups, immediate_size: 0 };
+            device.create_pipeline_layout( &descriptor )
+        };
+        let surface_layout = pipeline_layout( "water", &[ Some( frame_layout ), Some( part_layout ), Some( &layout ) ] );
+        let model_layout   = pipeline_layout( "reflection", &[ Some( frame_layout ), Some( part_layout ) ] );
+        let surface        = pipeline( device, &surface_layout, shader, "fs_water", wgpu::PrimitiveTopology::TriangleList, None, Some( wgpu::BlendState::ALPHA_BLENDING ) );
+        let mirrored       = pipeline( device, &model_layout, shader, "fs_main", wgpu::PrimitiveTopology::TriangleList, Some( wgpu::Face::Front ), None );
+
+        let sampler_descriptor = wgpu::SamplerDescriptor
+        {
+            label:      Some( "reflection" ),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        };
+        let sampler = device.create_sampler( &sampler_descriptor );
+
+        let frame_descriptor = wgpu::util::BufferInitDescriptor
+        {
+            label:    Some( "reflection frame" ),
+            contents: bytemuck::cast_slice( &[ 0.0f32; FRAME_FLOATS ] ),
+            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        };
+        let frame         = device.create_buffer_init( &frame_descriptor );
+        let frame_binding = [ wgpu::BindGroupEntry { binding: 0, resource: frame.as_entire_binding() } ];
+        let frame_group   = device.create_bind_group( &wgpu::BindGroupDescriptor { label: Some( "reflection frame" ), layout: frame_layout, entries: &frame_binding } );
+
+        let water = Self { surface, mirrored, layout, sampler, frame, frame_group, culling: culling.view( device ), levels, reflection: None };
+
+        water
+    }
+
     /// What the water reads: the reflection in `resolve`.
     fn group( &self, device: &wgpu::Device, resolve: &wgpu::TextureView ) -> wgpu::BindGroup
     {
@@ -1594,6 +1709,16 @@ impl Gpu
         ];
 
         device.create_bind_group( &wgpu::BindGroupDescriptor { label: Some( "reflection" ), layout: &self.layout, entries: &entries } )
+    }
+
+    /// The level mirrored for an eye at `eye`: of those under it, as water above the eye shows its underside,
+    /// the one whose water comes nearest; a far pond does not take the reflection from the river below.
+    fn level( &self, eye: [f32; 3] ) -> Option<f32>
+    {
+        let under = self.levels.iter().filter( |level| level.height < eye[ 1 ] );
+        let level = under.min_by( |a, b| a.distance( eye ).total_cmp( &b.distance( eye ) ) )?;
+
+        Some( level.height )
     }
 
     /// A reflection for frames of `size`, smaller by [`REFLECTION_DIVISOR`].

@@ -100,6 +100,7 @@ model:
   render: Отрисовка
   no_cull: Без отсечения граней
   occlusion: Скрывать заслонённое
+  reflections: Отражения
   visible_clusters: "Видно кластеров: %{visible} / %{total}"
   drawn_triangles: "Отрисовано треугольников: %{count}"
   frame_time: "%{fps} FPS · %{ms} мс"

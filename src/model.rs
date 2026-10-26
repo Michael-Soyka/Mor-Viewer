@@ -6,8 +6,15 @@ use mormesh::{ LightmapPage, Material, Mesh, Surface };
 use rust_i18n::t;
 use crate::animation::Skeleton;
 
-/// The game draws water with its own shader; a flat tint stands in for it.
-const WATER_COLOR: [f32; 4] = [ 0.25, 0.42, 0.55, 0.0 ];
+/// Base color of water under its reflection: nearly black, the game's water shows the reflection and the bed only.
+/// The game sets it from code; picked by eye.
+const WATER_COLOR: [f32; 4] = [ 0.04, 0.04, 0.04, 0.0 ];
+
+/// `WaterMesh::kind` of the river; the pond is 1.
+const RIVER_KIND: u8 = 2;
+
+/// Grid step clusters are cut by, in world units: a few houses of a city.
+const CLUSTER_CELL: f32 = 2048.0;
 
 /// Position, normal, uv, lightmap uv.
 pub type Vertex = [f32; 10];
@@ -48,6 +55,8 @@ pub struct Part
     /// Height of the water level the part lies on, if it is water; parts of different levels stay apart.
     pub water: Option<f32>,
 
+    /// Water that mirrors the scene, as the river; the pond only shines.
+    pub mirrors: bool,
 }
 
 /// 8-bit luminance with its mip levels: light of nearby sources, added to the lighting.
@@ -97,6 +106,10 @@ pub struct Source<'a>
 
     /// A water surface.
     water: bool,
+
+    /// Water that mirrors the scene: the river, the game's `CGeometryWater2`.
+    mirrors: bool,
+}
 
 impl Source<'_>
 {
@@ -223,7 +236,7 @@ impl Builder
         let water = source.water.then( || mid_height( source.positions ) );
 
         let same_material = lightmap.is_none() && self.parts.last().is_some_and(
-            |last: &Part| last.lightmap.is_none() && last.color == source.color && last.texture.as_deref().map( str::to_lowercase ) == source.texture.map( str::to_lowercase )
+            |last: &Part| last.lightmap.is_none() && last.water == water && last.mirrors == source.mirrors && last.color == source.color && last.texture.as_deref().map( str::to_lowercase ) == source.texture.map( str::to_lowercase )
         );
         match self.parts.last_mut()
         {
@@ -242,6 +255,8 @@ impl Builder
                     texture:   source.texture.map( str::to_owned ),
                     color:     source.color,
                     lightmap,
+                    water,
+                    mirrors:   source.mirrors,
                 };
                 self.parts.push( part );
             }
@@ -382,6 +397,9 @@ pub fn sources( mesh: &Mesh ) -> Result<(&'static str, Vec<Source<'_>>), String>
                 texture:   Some( mesh.texture.as_str() ),
                 color:     [ 1.0, 1.0, 1.0, 0.0 ],
                 lightmaps: Vec::new(),
+                mesh:      0,
+                water:     false,
+                mirrors:   false,
             };
             ( "model.character", vec![ character ] )
         }
@@ -396,6 +414,9 @@ pub fn sources( mesh: &Mesh ) -> Result<(&'static str, Vec<Source<'_>>), String>
                 texture:   None,
                 color:     WATER_COLOR,
                 lightmaps: Vec::new(),
+                mesh:      0,
+                water:     true,
+                mirrors:   mesh.kind == RIVER_KIND,
             };
             ( "model.water", vec![ water ] )
         }
@@ -411,6 +432,9 @@ pub fn sources( mesh: &Mesh ) -> Result<(&'static str, Vec<Source<'_>>), String>
                 texture:   Some( mesh.texture.as_str() ),
                 color:     [ 1.0, 1.0, 1.0, 0.0 ],
                 lightmaps: Vec::new(),
+                mesh:      0,
+                water:     false,
+                mirrors:   false,
             };
             ( "model.raw", vec![ raw ] )
         }
@@ -448,6 +472,9 @@ fn surface_source( surface: &Surface ) -> Source<'_>
         texture:   surface.material.texture(),
         color:     [ color[ 0 ], color[ 1 ], color[ 2 ], alpha ],
         lightmaps: surface.lightmaps.iter().map( |lightmap| ( lightmap.id, lightmap.pages.as_slice() ) ).collect(),
+        mesh:      0,
+        water:     false,
+        mirrors:   false,
     };
 
     source
@@ -466,6 +493,9 @@ fn interior_source( surface: &InteriorSurface ) -> Source<'_>
         texture:   surface.material.texture(),
         color:     [ 1.0, 1.0, 1.0, alpha ],
         lightmaps: surface.lightmaps.iter().map( |lightmap| ( lightmap.light, lightmap.pages.as_slice() ) ).collect(),
+        mesh:      0,
+        water:     false,
+        mirrors:   false,
     };
 
     source
