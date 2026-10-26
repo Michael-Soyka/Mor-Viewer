@@ -188,22 +188,23 @@ impl Library
         Some( ( archive, entry ) )
     }
 
-    /// Visible tree rows. A non-empty `filter` shows matching files with their folders expanded.
-    pub fn rows( &self, expanded: &HashSet<NodeKey>, filter: &str ) -> Vec<Row>
+    /// Visible tree rows. A non-empty `filter` shows matching files with their folders open, but for those in `collapsed`.
+    pub fn rows( &self, expanded: &HashSet<NodeKey>, collapsed: &HashSet<NodeKey>, filter: &str ) -> Vec<Row>
     {
         let needle   = filter.to_lowercase();
+        let open     = Open { expanded, collapsed, needle: &needle };
         let mut rows = Vec::new();
 
         for ( index, archive ) in self.archives.iter().enumerate()
         {
             let node         = NodeKey { archive: index, folder: String::new() };
-            let is_open      = !needle.is_empty() || expanded.contains( &node );
+            let is_open      = open.is_open( &node );
             let mut children = Vec::new();
-            if is_open
+            if is_open || open.searching()
             {
-                archive.folder_rows( index, &archive.root, "", 1, expanded, &needle, &mut children );
+                archive.folder_rows( index, &archive.root, "", 1, &open, &mut children );
             }
-            if !needle.is_empty() && children.is_empty()
+            if open.searching() && children.is_empty()
             {
                 continue;
             }
@@ -228,8 +229,7 @@ impl Archive
         folder: &Folder,
         prefix: &str,
         depth: usize,
-        expanded: &HashSet<NodeKey>,
-        needle: &str,
+        open: &Open,
         rows: &mut Vec<Row>,
     )
     {
@@ -237,12 +237,12 @@ impl Archive
         {
             let path = if prefix.is_empty() { name.clone() } else { format!( "{prefix}/{name}" ) };
             let node         = NodeKey { archive, folder: path.clone() };
-            let is_open      = !needle.is_empty() || expanded.contains( &node );
+            let is_open      = open.is_open( &node );
             let mut children = Vec::new();
-            if is_open
+            if is_open || open.searching()
             {
-                self.folder_rows( archive, child, &path, depth + 1, expanded, needle, &mut children );
-                if !needle.is_empty() && children.is_empty()
+                self.folder_rows( archive, child, &path, depth + 1, open, &mut children );
+                if open.searching() && children.is_empty()
                 {
                     continue;
                 }
@@ -250,13 +250,16 @@ impl Archive
 
             let row = Row { depth, label: name.clone(), kind: RowKind::Folder, node: Some( node ), expanded: is_open };
             rows.push( row );
-            rows.append( &mut children );
+            if is_open
+            {
+                rows.append( &mut children );
+            }
         }
 
         for &entry in &folder.files
         {
             let path = &self.entries[ entry ].path;
-            if !needle.is_empty() && !path.to_lowercase().contains( needle )
+            if open.searching() && !path.to_lowercase().contains( open.needle )
             {
                 continue;
             }
@@ -265,6 +268,29 @@ impl Archive
             let row   = Row { depth, label, kind: RowKind::File( key, preview::kind_of( path ) ), node: None, expanded: false };
             rows.push( row );
         }
+    }
+}
+
+/// Which folders are open: the expanded ones, or while searching all but the collapsed ones.
+struct Open<'a>
+{
+    expanded:  &'a HashSet<NodeKey>,
+    collapsed: &'a HashSet<NodeKey>,
+
+    /// Lowercase filter; empty when not searching.
+    needle: &'a str,
+}
+
+impl Open<'_>
+{
+    fn searching( &self ) -> bool
+    {
+        !self.needle.is_empty()
+    }
+
+    fn is_open( &self, node: &NodeKey ) -> bool
+    {
+        if self.searching() { !self.collapsed.contains( node ) } else { self.expanded.contains( node ) }
     }
 }
 

@@ -144,6 +144,9 @@ pub struct ViewerApp
     library:    Library,
     expanded:   HashSet<NodeKey>,
 
+    /// Folders closed while searching; the search opens all others.
+    collapsed: HashSet<NodeKey>,
+
     filter:     String,
     rows:       Vec<Row>,
     rows_dirty: bool,
@@ -190,6 +193,7 @@ impl ViewerApp
             title_bar:     TitleBar::new( &cc.egui_ctx ),
             library:       Library::default(),
             expanded:      HashSet::new(),
+            collapsed:     HashSet::new(),
             filter:        String::new(),
             rows:          Vec::new(),
             rows_dirty:    true,
@@ -290,6 +294,7 @@ impl ViewerApp
 
         self.thumbnails = std::mem::take( &mut self.thumbnails ).into_iter().filter_map( |( key, thumbnail )| Some( ( shift_key( key )?, thumbnail ) ) ).collect();
         self.expanded = std::mem::take( &mut self.expanded ).into_iter().filter_map( |node| Some( NodeKey { archive: shift( node.archive )?, ..node } ) ).collect();
+        self.collapsed = std::mem::take( &mut self.collapsed ).into_iter().filter_map( |node| Some( NodeKey { archive: shift( node.archive )?, ..node } ) ).collect();
         self.rows_dirty = true;
     }
 
@@ -297,21 +302,28 @@ impl ViewerApp
     {
         self.library = library;
         self.expanded.clear();
+        self.collapsed.clear();
         self.thumbnails.clear();
         self.tabs.clear();
         self.active = None;
         self.rows_dirty = true;
     }
 
+    /// A cleared search forgets what was collapsed in it.
     fn on_filter_change( &mut self )
     {
+        if self.filter.is_empty()
+        {
+            self.collapsed.clear();
+        }
         self.rows_dirty = true;
     }
 
     /// While searching, a toggle collapses or reopens the folder; otherwise it expands or collapses it.
     fn on_toggle( &mut self, node: NodeKey )
     {
-        if !self.expanded.remove( &node )
+        let set = if self.filter.is_empty() { &mut self.expanded } else { &mut self.collapsed };
+        if !set.remove( &node )
         {
             set.insert( node );
         }
@@ -546,7 +558,7 @@ impl ViewerApp
 
         if self.rows_dirty
         {
-            self.rows = self.library.rows( &self.expanded, &self.filter );
+            self.rows = self.library.rows( &self.expanded, &self.collapsed, &self.filter );
             self.rows_dirty = false;
         }
         let actions = match self.settings.sidebar
