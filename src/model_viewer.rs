@@ -6,6 +6,8 @@ use eframe::egui_wgpu::{ RenderState, wgpu };
 use wgpu::util::DeviceExt;
 
 use rust_i18n::t;
+use crate::animation::Player;
+use crate::blur::Blur;
 use crate::i18n;
 use crate::icons;
 use crate::culling::{ self, CullView, Culling };
@@ -625,7 +627,14 @@ struct Gpu
 
 pub struct ModelViewer
 {
-    gpu:     Gpu,
+    gpu: Gpu,
+
+    /// The frame under the floating plates.
+    blur: Blur,
+
+    /// A character's animations.
+    player: Option<Player>,
+
     stats:   Stats,
     camera:  Camera,
     mode:    RenderMode,
@@ -672,8 +681,11 @@ impl ModelViewer
 
     pub fn from_decoded( state: &RenderState, model: &Model, textures: &Textures, missing: Vec<String>, camera: Camera ) -> Self
     {
-        let gpu   = Gpu::new( state, model, textures );
-        let stats = Stats { kind: model.kind, surfaces: model.surfaces, vertices: model.vertices.len(), triangles: model.triangle_count() };
+        let gpu         = Gpu::new( state, model, textures );
+        let blur        = Blur::new( state, COLOR_FORMAT );
+        let player      = model.skeleton.clone().map( |skeleton| Player::new( skeleton, model.vertices.clone() ) );
+        let unsupported = culling::unsupported( &state.adapter, &state.device );
+        let stats       = Stats { kind: model.kind, surfaces: model.surfaces, vertices: model.vertices.len(), triangles: model.triangle_count() };
 
         Self { gpu, stats, home: camera.clone(), camera, mode: RenderMode::Shaded, options: RenderOptions::DEFAULT, defaults: RenderOptions::DEFAULT, light: Light::DEFAULT, missing, dirty: true, hint_until: None, lights: Vec::new(), show_lights: true, paths: PathView { cells: false, links: false }, switched_off: HashSet::new(), ambient: None, fog: Fog::DEFAULT }
     }
@@ -797,6 +809,19 @@ impl ModelViewer
             }
         }
 
+        if let Some( player ) = &mut self.player
+        {
+            if let Some( timeline ) = &mut sections.timeline
+            {
+                player.show( timeline, plate );
+            }
+            if player.playing()
+            {
+                player.advance( sections.view.input( |input| input.stable_dt ) );
+                sections.view.ctx().request_repaint();
+            }
+        }
+
         let view = &mut sections.view;
         let ( rect, response ) = view.allocate_exact_size( view.available_size(), Sense::click_and_drag() );
         let light = if self.show_lights { light_under( rect, &self.camera, &self.lights, response.hover_pos() ) } else { None };
@@ -917,6 +942,15 @@ impl ModelViewer
         if resized
         {
             self.gpu.resize( size );
+            if let Some( target ) = &self.gpu.target
+            {
+                self.blur.resize( &target.resolve, size );
+            }
+            self.dirty = true;
+        }
+        if let Some( vertices ) = self.player.as_mut().and_then( Player::pose )
+        {
+            self.gpu.set_vertices( vertices );
             self.dirty = true;
         }
         if std::mem::take( &mut self.dirty )
@@ -1309,10 +1343,10 @@ impl Gpu
             device.create_buffer_init( &wgpu::util::BufferInitDescriptor { label: Some( label ), contents, usage } )
         };
         let split         = VertexChunks::new( model );
-        let vertices      = split.ranges.iter().map( |range| buffer( "model vertices", bytemuck::cast_slice( &model.vertices[ range.clone() ] ), wgpu::BufferUsages::VERTEX ) ).collect();
+        let vertices      = split.ranges.iter().map( |range| buffer( "model vertices", bytemuck::cast_slice( &model.vertices[ range.clone() ] ), wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST ) ).collect();
         let triangles     = buffer( "model triangles", bytemuck::cast_slice( &non_empty( &split.triangles ) ), wgpu::BufferUsages::INDEX );
         let edges         = buffer( "model edges", bytemuck::cast_slice( &non_empty( &split.edges ) ), wgpu::BufferUsages::INDEX );
-        let frame         = buffer( "model frame", bytemuck::cast_slice( &[ 0.0f32; 40 ] ), wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST );
+        let frame         = buffer( "model frame", bytemuck::cast_slice( &[ 0.0f32; FRAME_FLOATS ] ), wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST );
         let frame_binding = [ wgpu::BindGroupEntry { binding: 0, resource: frame.as_entire_binding() } ];
         let frame_group   = device.create_bind_group( &wgpu::BindGroupDescriptor { label: Some( "model frame" ), layout: &frame_layout, entries: &frame_binding } );
 
@@ -1377,6 +1411,13 @@ impl Gpu
         };
 
         gpu
+    }
+
+    /// New vertices for a model of one chunk, as a character is.
+    fn set_vertices( &self, vertices: &[Vertex] )
+    {
+        let Some( buffer ) = self.vertices.first() else { return };
+        self.state.queue.write_buffer( buffer, 0, bytemuck::cast_slice( vertices ) );
     }
 
     fn set_light_colors( &self, colors: &HashMap<u32, Color32> )

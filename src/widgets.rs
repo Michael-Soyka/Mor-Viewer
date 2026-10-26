@@ -224,6 +224,20 @@ pub fn icon_toggle( ui: &mut egui::Ui, palette: &Palette, source: ImageSource<'s
     response
 }
 
+/// Play, or pause while `playing`.
+pub fn play_button( ui: &mut egui::Ui, palette: &Palette, playing: bool ) -> Response
+{
+    let ( rect, response ) = ui.allocate_exact_size( Vec2::splat( 22.0 ), Sense::click() );
+    if response.hovered()
+    {
+        ui.painter().rect_filled( rect, CornerRadius::same( theme::CONTROL_RADIUS ), palette.hovered );
+    }
+    let source = if playing { icons::PAUSE } else { icons::PLAY };
+    paint_icon( ui, source, Rect::from_center_size( rect.center(), Vec2::splat( ICON_SIZE ) ), palette.text );
+
+    response
+}
+
 pub enum Zoom
 {
     Unchanged,

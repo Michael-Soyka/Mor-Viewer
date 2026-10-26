@@ -3,6 +3,7 @@
 
 #![ cfg_attr( not( debug_assertions ), windows_subsystem = "windows" ) ]
 
+mod animation;
 mod app;
 mod audio_viewer;
 mod blur;

@@ -103,6 +103,7 @@ model:
   visible_clusters: "Visible clusters: %{visible} / %{total}"
   drawn_triangles: "Triangles drawn: %{count}"
   frame_time: "%{fps} FPS · %{ms} ms"
+  frame: "Frame %{current}/%{total}"
   unsupported: "The device does not support: %{list}"
   lightmaps: Lightmaps
   fog: Fog
