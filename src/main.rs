@@ -1,4 +1,5 @@
-//! Usage: mor-viewer [data_dir | archive.vfs]
+//! Usage: mor-viewer [data_dir | archive.vfs | game_file]
+//! Unpacked game files open only with the `load_unpacked` setting, see [`settings::Settings`].
 //! Without an argument, falls back to the `PATHOLOGIC_DATA` environment variable.
 
 #![ cfg_attr( not( debug_assertions ), windows_subsystem = "windows" ) ]
