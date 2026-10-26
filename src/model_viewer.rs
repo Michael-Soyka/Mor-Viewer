@@ -324,8 +324,8 @@ impl Orbit
         }
     }
 
-    /// Returns whether the view changed.
-    fn on_input( &mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect ) -> bool
+    /// `delta` is the drag's movement; returns whether the view changed.
+    fn on_input( &mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect, delta: Vec2 ) -> bool
     {
         let mut changed = false;
 
@@ -386,8 +386,8 @@ impl Fly
         [ cos_yaw, 0.0, -sin_yaw ]
     }
 
-    /// Returns whether the view changed.
-    fn on_input( &mut self, ui: &egui::Ui, response: &egui::Response ) -> bool
+    /// `delta` is the drag's movement; returns whether the view changed.
+    fn on_input( &mut self, ui: &egui::Ui, response: &egui::Response, delta: Vec2 ) -> bool
     {
         let mut changed = false;
 
@@ -437,6 +437,53 @@ impl Fly
         }
 
         changed
+    }
+}
+
+/// Hides the cursor and holds it where the drag began, so looking around never runs into the window edge;
+/// the drag then moves by the raw mouse motion.
+#[ derive( Default ) ]
+struct CursorCapture
+{
+    /// Where the cursor is held, while captured.
+    anchor: Option<Pos2>,
+}
+
+impl CursorCapture
+{
+    /// The drag's movement this frame, in points.
+    fn on_drag( &mut self, ui: &egui::Ui, response: &egui::Response ) -> Vec2
+    {
+        let ctx = ui.ctx();
+
+        if !response.dragged()
+        {
+            if self.anchor.take().is_some()
+            {
+                ctx.send_viewport_cmd( egui::ViewportCommand::CursorGrab( egui::CursorGrab::None ) );
+                ctx.send_viewport_cmd( egui::ViewportCommand::CursorVisible( true ) );
+            }
+            return response.drag_delta();
+        }
+
+        let anchor = match self.anchor
+        {
+            Some( anchor ) => anchor,
+            None =>
+            {
+                let Some( origin ) = ui.input( |input| input.pointer.press_origin() ) else { return response.drag_delta() };
+                // Windows only confines the cursor, macOS only locks it; holding it in place covers both.
+                let grab = if cfg!( target_os = "macos" ) { egui::CursorGrab::Locked } else { egui::CursorGrab::Confined };
+                ctx.send_viewport_cmd( egui::ViewportCommand::CursorGrab( grab ) );
+                ctx.send_viewport_cmd( egui::ViewportCommand::CursorVisible( false ) );
+                *self.anchor.insert( origin )
+            }
+        };
+        ctx.send_viewport_cmd( egui::ViewportCommand::CursorPosition( anchor ) );
+
+        let ( motion, pixels_per_point ) = ui.input( |input| ( input.pointer.motion(), input.pixels_per_point ) );
+
+        motion.map_or_else( || response.drag_delta(), |motion| motion / pixels_per_point )
     }
 }
 
@@ -925,10 +972,11 @@ impl ModelViewer
             return;
         }
 
+        let delta = if self.level { self.capture.on_drag( ui, response ) } else { response.drag_delta() };
         self.dirty |= match &mut self.camera
         {
-            Camera::Orbit( orbit ) => orbit.on_input( ui, response, rect ),
-            Camera::Fly( fly ) => fly.on_input( ui, response ),
+            Camera::Orbit( orbit ) => orbit.on_input( ui, response, rect, delta ),
+            Camera::Fly( fly ) => fly.on_input( ui, response, delta ),
         };
     }
 
