@@ -26,8 +26,14 @@ mod widgets;
 mod xml_viewer;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use eframe::egui_wgpu::{ self, wgpu };
 
 rust_i18n::i18n!( "locales", fallback = "en" );
+
+/// Also names the directory eframe keeps the settings in.
+const APP_NAME: &str = "Mor Viewer";
 
 fn main() -> eframe::Result
 {
@@ -48,9 +54,31 @@ fn main() -> eframe::Result
     #[ cfg( not( target_os = "macos" ) ) ]
     let viewport = viewport.with_decorations( false );
 
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let backend   = settings::Settings::saved( APP_NAME ).viewer.backend;
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or( backend.backends() );
+    setup.device_descriptor = Arc::new( device_descriptor );
 
-    eframe::run_native( "Mor Viewer", options, Box::new( |cc| Ok( Box::new( app::ViewerApp::new( cc, start ) ) ) ) )
+    let wgpu_options = egui_wgpu::WgpuConfiguration { wgpu_setup: egui_wgpu::WgpuSetup::CreateNew( setup ), ..Default::default() };
+    let options      = eframe::NativeOptions { viewport, wgpu_options, ..Default::default() };
+
+    eframe::run_native( APP_NAME, options, Box::new( |cc| Ok( Box::new( app::ViewerApp::new( cc, start ) ) ) ) )
+}
+
+/// egui's device, plus the indirect draw count that lets the culling skip hidden draws.
+fn device_descriptor( adapter: &wgpu::Adapter ) -> wgpu::DeviceDescriptor<'static>
+{
+    // egui's own limit: a depth buffer the size of a 4K+ display.
+    let limits = wgpu::Limits { max_texture_dimension_2d: 8192, ..wgpu::Limits::default() };
+    let descriptor = wgpu::DeviceDescriptor
+    {
+        label:             Some( "mor viewer" ),
+        required_features: adapter.features() & wgpu::Features::MULTI_DRAW_INDIRECT_COUNT,
+        required_limits:   limits,
+        ..Default::default()
+    };
+
+    descriptor
 }
 
 /// The title bar icon, rasterized for the window and the taskbar.

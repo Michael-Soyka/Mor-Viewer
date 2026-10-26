@@ -10,7 +10,18 @@ struct Frame {
     fog_color: vec4<f32>,
     // x: distance the fog starts at, y: where it hides everything.
     fog_range: vec4<f32>,
+    // Kept side of a reflection's mirror plane, dot(xyz, position) + w >= 0; (0, 0, 0, 1) keeps everything.
+    clip: vec4<f32>,
+    // x: height of the mirrored water level, y: 1 when its reflection is drawn, zw: 1 / frame size in pixels.
+    water: vec4<f32>,
+    // rgb: the background, what water reflects without a reflection.
+    sky: vec4<f32>,
 };
+
+// Below the mirror plane of a reflection pass.
+fn clipped(position: vec3<f32>) -> bool {
+    return (dot(frame.clip.xyz, position) + frame.clip.w) < 0.0;
+}
 
 // Share of the fog color at a point: linear in the distance from the eye, as the game's range-based fog.
 fn fog_amount(position: vec3<f32>) -> f32 {
@@ -31,6 +42,9 @@ struct Part {
 @group(1) @binding(1) var albedo_sampler: sampler;
 @group(1) @binding(2) var<uniform> part: Part;
 @group(1) @binding(3) var lightmap: texture_2d<f32>;
+// The scene mirrored in the water level, at the same screen positions as the frame.
+@group(2) @binding(0) var reflection: texture_2d<f32>;
+@group(2) @binding(1) var reflection_sampler: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -96,7 +110,7 @@ fn fs_wire(input: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_lightmap(input: VertexOutput) -> @location(0) vec4<f32> {
     let texel = textureSample(albedo, albedo_sampler, input.uv);
     let baked = textureSample(lightmap, albedo_sampler, input.lightmap_uv).r;
-    if (part.color.a > 0.5 && texel.a < 0.5) {
+    if ((part.color.a > 0.5 && texel.a < 0.5) || clipped(input.position)) {
         discard;
     }
     // Added light fades with the fog, as the plain pass under it does.

@@ -10,6 +10,7 @@ use eframe::egui_wgpu::RenderState;
 use rust_i18n::t;
 use crate::model_viewer::{ Camera, ModelViewer };
 use crate::scene::{ self, LoadedScene, Progress };
+use crate::settings::ViewerSettings;
 use crate::theme::Palette;
 use crate::viewer::Sections;
 
@@ -36,7 +37,7 @@ impl SceneViewer
     }
 
     /// Returns the loading error, once.
-    pub fn show( &mut self, sections: &mut Sections, palette: &Palette ) -> Option<String>
+    pub fn show( &mut self, sections: &mut Sections, palette: &Palette, view: &ViewerSettings ) -> Option<String>
     {
         let mut error = None;
 
@@ -52,7 +53,7 @@ impl SceneViewer
 
         if let Some( viewer ) = &mut self.viewer
         {
-            viewer.show( sections, palette );
+            viewer.show( sections, palette, view );
         }
         else if self.task.is_some()
         {

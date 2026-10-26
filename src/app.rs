@@ -1,6 +1,8 @@
 use std::collections::{ HashMap, HashSet };
 use std::path::{ Path, PathBuf };
+use std::time::{ Duration, Instant };
 
+use eframe::egui_wgpu::wgpu;
 use eframe::egui::{
     self, Align, CornerRadius, CursorIcon, FontId, Key, Layout, Pos2, Rect, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, UiBuilder, Vec2,
 };
@@ -141,6 +143,7 @@ pub struct ViewerApp
     title_bar:  TitleBar,
     library:    Library,
     expanded:   HashSet<NodeKey>,
+
     filter:     String,
     rows:       Vec<Row>,
     rows_dirty: bool,
@@ -164,6 +167,9 @@ pub struct ViewerApp
     checker:       TextureHandle,
     render_state:  Option<eframe::egui_wgpu::RenderState>,
     message:       Option<String>,
+
+    /// When the last frame's UI finished, for the FPS limit.
+    frame_end: Option<Instant>,
 }
 
 impl ViewerApp
@@ -201,6 +207,7 @@ impl ViewerApp
             checker:       texture_viewer::new_checker( &cc.egui_ctx ),
             render_state:  cc.wgpu_render_state.clone(),
             message:       None,
+            frame_end:     None,
         };
 
         if let Some( path ) = start
@@ -301,11 +308,12 @@ impl ViewerApp
         self.rows_dirty = true;
     }
 
+    /// While searching, a toggle collapses or reopens the folder; otherwise it expands or collapses it.
     fn on_toggle( &mut self, node: NodeKey )
     {
         if !self.expanded.remove( &node )
         {
-            self.expanded.insert( node );
+            set.insert( node );
         }
         self.rows_dirty = true;
     }
@@ -842,7 +850,7 @@ impl ViewerApp
         let checker = &self.checker;
         let error = match self.active.and_then( |index| self.tabs.get_mut( index ) )
         {
-            Some( tab ) => tab.viewer.show( &mut body_ui, palette, checker, &tab.data ),
+            Some( tab ) => tab.viewer.show( &mut body_ui, palette, checker, &tab.data, &self.settings.viewer ),
             None =>
             {
                 let hint = if self.library.archives.is_empty() { t!( "blank.open_folder" ) } else { t!( "blank.select_file" ) };
@@ -919,6 +927,30 @@ impl ViewerApp
         {
             ctx.set_zoom_factor( self.settings.ui_scale );
         }
+    }
+
+    /// The surface keeps its other parameters; the present mode follows the vsync setting.
+    fn apply_vsync( &self, frame: &mut eframe::Frame )
+    {
+        let Some( mut config ) = frame.wgpu_surface_config() else { return };
+        config.present_mode = if self.settings.viewer.vsync { wgpu::PresentMode::AutoVsync } else { wgpu::PresentMode::AutoNoVsync };
+        frame.set_wgpu_surface_config( config );
+    }
+
+    /// Without vsync, waits out what is left of the frame the FPS limit allows.
+    fn limit_fps( &mut self )
+    {
+        let viewer = self.settings.viewer;
+
+        if let Some( last ) = self.frame_end.filter( |_| !viewer.vsync )
+        {
+            let frame = Duration::from_secs_f64( 1.0 / f64::from( viewer.fps_limit.max( 1 ) ) );
+            if let Some( rest ) = frame.checked_sub( last.elapsed() )
+            {
+                std::thread::sleep( rest );
+            }
+        }
+        self.frame_end = Some( Instant::now() );
     }
 
     /// Applies a theme picked in the settings or, for the system one, changed in the OS.
@@ -1200,8 +1232,9 @@ impl eframe::App for ViewerApp
         eframe::set_value( storage, settings::STORAGE_KEY, &self.settings );
     }
 
-    fn ui( &mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame )
+    fn ui( &mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame )
     {
+        self.apply_vsync( frame );
         let ctx = ui.ctx().clone();
         self.apply_theme( &ctx );
 
@@ -1252,5 +1285,6 @@ impl eframe::App for ViewerApp
         self.preferences( &ctx );
         self.window_border( &ctx );
         title_bar::resize_edges( &ctx );
+        self.limit_fps();
     }
 }

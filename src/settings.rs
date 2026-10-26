@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use eframe::egui_wgpu::wgpu;
 use eframe::egui::{ self, Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2 };
 use serde::{ Deserialize, Serialize };
 
@@ -9,6 +11,11 @@ use crate::theme::{ self, Palette, Theme };
 use crate::widgets;
 
 pub const STORAGE_KEY: &str = "settings";
+
+/// eframe's store in its storage directory.
+const STORAGE_FILE: &str = "app.ron";
+
+const FPS_LIMITS: std::ops::RangeInclusive<u32> = 30..=480;
 
 const MODAL_SIZE:      Vec2       = Vec2::new( 720.0, 510.0 );
 const NAV_WIDTH:       f32        = 186.0;
@@ -42,6 +49,87 @@ impl SidebarLayout
     }
 }
 
+/// Graphics API the window and the 3D views are drawn with; picked at startup.
+#[ derive( Clone, Copy, PartialEq, Eq, Serialize, Deserialize ) ]
+pub enum GraphicsBackend
+{
+    Dx12,
+    Vulkan,
+    Metal,
+}
+
+impl GraphicsBackend
+{
+    #[ cfg( target_os = "windows" ) ]
+    pub const ALL: &[Self] = &[ Self::Dx12, Self::Vulkan ];
+
+    /// Vulkan only runs on macOS through a translation layer.
+    #[ cfg( target_os = "macos" ) ]
+    pub const ALL: &[Self] = &[ Self::Metal ];
+
+    #[ cfg( not( any( target_os = "windows", target_os = "macos" ) ) ) ]
+    pub const ALL: &[Self] = &[ Self::Vulkan ];
+
+    pub fn label( self ) -> &'static str
+    {
+        match self
+        {
+            Self::Dx12 => "DirectX 12",
+            Self::Vulkan => "Vulkan",
+            Self::Metal => "Metal",
+        }
+    }
+
+    /// The saved choice if this platform has it, else its first.
+    pub fn backends( self ) -> wgpu::Backends
+    {
+        let backend = if Self::ALL.contains( &self ) { self } else { Self::ALL[ 0 ] };
+
+        match backend
+        {
+            Self::Dx12 => wgpu::Backends::DX12,
+            Self::Vulkan => wgpu::Backends::VULKAN,
+            Self::Metal => wgpu::Backends::METAL,
+        }
+    }
+}
+
+/// How the 3D views draw and what they show over the picture.
+#[ derive( Clone, Copy, PartialEq, Serialize, Deserialize ) ]
+#[ serde( default ) ]
+pub struct ViewerSettings
+{
+    pub backend: GraphicsBackend,
+    pub vsync:   bool,
+
+    /// Frames per second at most when vsync is off.
+    pub fps_limit: u32,
+
+    pub show_fps:         bool,
+    pub show_coordinates: bool,
+    pub show_stats:       bool,
+    pub show_orientation: bool,
+}
+
+impl Default for ViewerSettings
+{
+    fn default() -> Self
+    {
+        let settings = ViewerSettings
+        {
+            backend:          GraphicsBackend::ALL[ 0 ],
+            vsync:            true,
+            fps_limit:        144,
+            show_fps:         true,
+            show_coordinates: true,
+            show_stats:       true,
+            show_orientation: true,
+        };
+
+        settings
+    }
+}
+
 #[ derive( Clone, Serialize, Deserialize ) ]
 #[ serde( default ) ]
 pub struct Settings
@@ -54,6 +142,22 @@ pub struct Settings
 
     /// The game's data folder; when set, its archives load at startup.
     pub game_data: Option<PathBuf>,
+
+    pub viewer: ViewerSettings,
+}
+
+impl Settings
+{
+    /// What the last run saved, read before the window exists: the graphics API is chosen with it.
+    pub fn saved( app_name: &str ) -> Self
+    {
+        let path   = eframe::storage_dir( app_name ).map( |dir| dir.join( STORAGE_FILE ) );
+        let text   = path.and_then( |path| std::fs::read_to_string( path ).ok() );
+        let values = text.and_then( |text| ron::from_str::<HashMap<String, String>>( &text ).ok() );
+        let saved  = values.and_then( |values| ron::from_str( values.get( STORAGE_KEY )? ).ok() );
+
+        saved.unwrap_or_default()
+    }
 }
 
 impl Default for Settings
@@ -68,6 +172,7 @@ impl Default for Settings
             ui_scale:          1.0,
             theme:             Theme::Dark,
             game_data:         Some( PathBuf::from( STEAM_GAME_DATA ) ).filter( |dir| dir.is_dir() ),
+            viewer:            ViewerSettings::default(),
         };
 
         settings
@@ -79,6 +184,7 @@ pub enum Page
 {
     General,
     Game,
+    Viewer,
     Theming,
     About,
 }
@@ -91,6 +197,7 @@ impl Page
         {
             Self::General => "settings.general",
             Self::Game => "settings.game",
+            Self::Viewer => "settings.viewer",
             Self::Theming => "settings.theming",
             Self::About => "settings.about",
         }
@@ -122,7 +229,7 @@ pub fn show( ctx: &egui::Context, palette: &Palette, settings: &mut Settings, pa
             let mut nav_ui = ui.new_child( UiBuilder::new().max_rect( nav.shrink( NAV_PADDING ) ).layout( Layout::top_down( Align::Min ) ) );
             let back       = navigation( &mut nav_ui, palette, &t!( "settings.back" ), true, false );
             nav_ui.add_space( NAV_PADDING );
-            for item in [ Page::General, Page::Game, Page::Theming ]
+            for item in [ Page::General, Page::Game, Page::Viewer, Page::Theming ]
             {
                 if navigation( &mut nav_ui, palette, &t!( item.key() ), false, *page == item ).clicked()
                 {
@@ -146,6 +253,7 @@ pub fn show( ctx: &egui::Context, palette: &Palette, settings: &mut Settings, pa
             {
                 Page::General => general( &mut content_ui, palette, settings ),
                 Page::Game => game( &mut content_ui, palette, settings ),
+                Page::Viewer => viewer( &mut content_ui, palette, &mut settings.viewer ),
                 Page::Theming => theming( &mut content_ui, palette, settings ),
                 Page::About => about_page( &mut content_ui, palette, about ),
             }
@@ -266,6 +374,54 @@ fn game( ui: &mut egui::Ui, palette: &Palette, settings: &mut Settings )
     };
     ui.add_space( 6.0 );
     ui.label( egui::RichText::new( path ).size( theme::TEXT_SIZE ).color( color ) );
+}
+
+fn viewer( ui: &mut egui::Ui, palette: &Palette, settings: &mut ViewerSettings )
+{
+    row(
+        ui,
+        palette,
+        &t!( "settings.backend" ),
+        |ui|
+        {
+            choice( ui, palette, &mut settings.backend, GraphicsBackend::ALL, |backend| backend.label().to_owned() );
+        }
+    );
+    ui.add_space( 6.0 );
+    ui.label( egui::RichText::new( t!( "settings.backend_hint" ) ).size( theme::TEXT_SIZE ).color( palette.menu_text ) );
+    ui.add_space( 6.0 );
+
+    switch( ui, palette, &t!( "settings.vsync" ), &mut settings.vsync );
+    if !settings.vsync
+    {
+        row(
+            ui,
+            palette,
+            &t!( "settings.fps_limit" ),
+            |ui|
+            {
+                ui.add( egui::Slider::new( &mut settings.fps_limit, FPS_LIMITS ) );
+            }
+        );
+    }
+    switch( ui, palette, &t!( "settings.show_fps" ), &mut settings.show_fps );
+    switch( ui, palette, &t!( "settings.show_coordinates" ), &mut settings.show_coordinates );
+    switch( ui, palette, &t!( "settings.show_stats" ), &mut settings.show_stats );
+    switch( ui, palette, &t!( "settings.show_orientation" ), &mut settings.show_orientation );
+}
+
+/// Setting row with a checkbox on the right.
+fn switch( ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut bool )
+{
+    row(
+        ui,
+        palette,
+        label,
+        |ui|
+        {
+            ui.checkbox( value, "" );
+        }
+    );
 }
 
 fn theming( ui: &mut egui::Ui, palette: &Palette, settings: &mut Settings )

@@ -99,6 +99,11 @@ model:
   lighting: Lighting
   render: Render
   no_cull: No face culling
+  occlusion: Hide occluded geometry
+  visible_clusters: "Visible clusters: %{visible} / %{total}"
+  drawn_triangles: "Triangles drawn: %{count}"
+  frame_time: "%{fps} FPS · %{ms} ms"
+  unsupported: "The device does not support: %{list}"
   lightmaps: Lightmaps
   fog: Fog
   fog_start: Start
@@ -156,6 +161,15 @@ settings:
   theming: Theming
   about: About
   game: Game
+  viewer: Viewer
+  backend: Graphics API
+  backend_hint: A new API takes effect after a restart.
+  vsync: Vertical sync
+  fps_limit: FPS limit
+  show_fps: Show FPS
+  show_coordinates: Show coordinates
+  show_stats: Show scene statistics
+  show_orientation: Show orientation
   data_folder: Data folder
   data_folder_hint: Not set. Without it the app starts empty.
   browse: Browse…
