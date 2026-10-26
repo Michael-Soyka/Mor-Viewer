@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use eframe::egui_wgpu::wgpu;
 use eframe::egui::{ self, Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2 };
 use serde::{ Deserialize, Serialize };
 
@@ -11,9 +9,6 @@ use crate::ui::theme::{ self, Palette, Theme };
 use crate::ui::widgets;
 
 pub const STORAGE_KEY: &str = "settings";
-
-/// eframe's store in its storage directory.
-const STORAGE_FILE: &str = "app.ron";
 
 const FPS_LIMITS: std::ops::RangeInclusive<u32> = 30..=480;
 
@@ -49,58 +44,12 @@ impl SidebarLayout
     }
 }
 
-/// Graphics API the window and the 3D views are drawn with; picked at startup.
-#[ derive( Clone, Copy, PartialEq, Eq, Serialize, Deserialize ) ]
-pub enum GraphicsBackend
-{
-    Dx12,
-    Vulkan,
-    Metal,
-}
-
-impl GraphicsBackend
-{
-    #[ cfg( target_os = "windows" ) ]
-    pub const ALL: &[Self] = &[ Self::Dx12, Self::Vulkan ];
-
-    /// Vulkan only runs on macOS through a translation layer.
-    #[ cfg( target_os = "macos" ) ]
-    pub const ALL: &[Self] = &[ Self::Metal ];
-
-    #[ cfg( not( any( target_os = "windows", target_os = "macos" ) ) ) ]
-    pub const ALL: &[Self] = &[ Self::Vulkan ];
-
-    pub fn label( self ) -> &'static str
-    {
-        match self
-        {
-            Self::Dx12 => "DirectX 12",
-            Self::Vulkan => "Vulkan",
-            Self::Metal => "Metal",
-        }
-    }
-
-    /// The saved choice if this platform has it, else its first.
-    pub fn backends( self ) -> wgpu::Backends
-    {
-        let backend = if Self::ALL.contains( &self ) { self } else { Self::ALL[ 0 ] };
-
-        match backend
-        {
-            Self::Dx12 => wgpu::Backends::DX12,
-            Self::Vulkan => wgpu::Backends::VULKAN,
-            Self::Metal => wgpu::Backends::METAL,
-        }
-    }
-}
-
 /// How the 3D views draw and what they show over the picture.
 #[ derive( Clone, Copy, PartialEq, Serialize, Deserialize ) ]
 #[ serde( default ) ]
 pub struct ViewerSettings
 {
-    pub backend: GraphicsBackend,
-    pub vsync:   bool,
+    pub vsync: bool,
 
     /// Frames per second at most when vsync is off.
     pub fps_limit: u32,
@@ -117,7 +66,6 @@ impl Default for ViewerSettings
     {
         let settings = ViewerSettings
         {
-            backend:          GraphicsBackend::ALL[ 0 ],
             vsync:            true,
             fps_limit:        144,
             show_fps:         true,
@@ -144,20 +92,6 @@ pub struct Settings
     pub game_data: Option<PathBuf>,
 
     pub viewer: ViewerSettings,
-}
-
-impl Settings
-{
-    /// What the last run saved, read before the window exists: the graphics API is chosen with it.
-    pub fn saved( app_name: &str ) -> Self
-    {
-        let path   = eframe::storage_dir( app_name ).map( |dir| dir.join( STORAGE_FILE ) );
-        let text   = path.and_then( |path| std::fs::read_to_string( path ).ok() );
-        let values = text.and_then( |text| ron::from_str::<HashMap<String, String>>( &text ).ok() );
-        let saved  = values.and_then( |values| ron::from_str( values.get( STORAGE_KEY )? ).ok() );
-
-        saved.unwrap_or_default()
-    }
 }
 
 impl Default for Settings
@@ -378,19 +312,6 @@ fn game( ui: &mut egui::Ui, palette: &Palette, settings: &mut Settings )
 
 fn viewer( ui: &mut egui::Ui, palette: &Palette, settings: &mut ViewerSettings )
 {
-    row(
-        ui,
-        palette,
-        &t!( "settings.backend" ),
-        |ui|
-        {
-            choice( ui, palette, &mut settings.backend, GraphicsBackend::ALL, |backend| backend.label().to_owned() );
-        }
-    );
-    ui.add_space( 6.0 );
-    ui.label( egui::RichText::new( t!( "settings.backend_hint" ) ).size( theme::TEXT_SIZE ).color( palette.menu_text ) );
-    ui.add_space( 6.0 );
-
     switch( ui, palette, &t!( "settings.vsync" ), &mut settings.vsync );
     if !settings.vsync
     {

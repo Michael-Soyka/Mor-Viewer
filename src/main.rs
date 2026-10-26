@@ -21,6 +21,13 @@ rust_i18n::i18n!( "locales", fallback = "en" );
 /// Also names the directory eframe keeps the settings in.
 const APP_NAME: &str = "Mor Viewer";
 
+/// The one graphics API of each platform.
+#[ cfg( target_os = "macos" ) ]
+const BACKENDS: wgpu::Backends = wgpu::Backends::METAL;
+
+#[ cfg( not( target_os = "macos" ) ) ]
+const BACKENDS: wgpu::Backends = wgpu::Backends::VULKAN;
+
 fn main() -> eframe::Result
 {
     let start = std::env::args_os().nth( 1 ).or_else( || std::env::var_os( "PATHOLOGIC_DATA" ) ).map( PathBuf::from );
@@ -40,9 +47,8 @@ fn main() -> eframe::Result
     #[ cfg( not( target_os = "macos" ) ) ]
     let viewport = viewport.with_decorations( false );
 
-    let backend   = settings::Settings::saved( APP_NAME ).viewer.backend;
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-    setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or( backend.backends() );
+    setup.instance_descriptor.backends = BACKENDS;
     setup.device_descriptor = Arc::new( device_descriptor );
 
     let wgpu_options = egui_wgpu::WgpuConfiguration { wgpu_setup: egui_wgpu::WgpuSetup::CreateNew( setup ), ..Default::default() };

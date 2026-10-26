@@ -919,7 +919,7 @@ impl ViewerApp
                 let info = state.adapter.get_info();
                 format!( "{} ({:?})", info.name, info.backend )
             }
-            None => "OpenGL".to_owned(),
+            None => "—".to_owned(),
         };
         let language  = self.settings.language;
         let game_data = self.settings.game_data.clone();

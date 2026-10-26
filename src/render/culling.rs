@@ -423,7 +423,7 @@ pub fn unsupported( adapter: &wgpu::Adapter, device: &wgpu::Device ) -> Vec<&'st
     let downlevel = adapter.get_downlevel_capabilities().flags;
     let checks =
     [
-        ( matches!( backend, wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal ), "Vulkan / DirectX 12 / Metal" ),
+        ( matches!( backend, wgpu::Backend::Vulkan | wgpu::Backend::Metal ), "Vulkan / Metal" ),
         ( downlevel.contains( wgpu::DownlevelFlags::COMPUTE_SHADERS ), "compute shaders" ),
         ( downlevel.contains( wgpu::DownlevelFlags::INDIRECT_EXECUTION ), "indirect draws" ),
         ( device.features().contains( wgpu::Features::MULTI_DRAW_INDIRECT_COUNT ), "multi draw indirect count" ),
