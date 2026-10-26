@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use eframe::egui::layers::ShapeIdx;
-use eframe::egui::{ self, Align, Color32, CornerRadius, LayerId, Layout, Order, Pos2, Rect, Shape, TextureHandle, UiBuilder, Vec2 };
+use eframe::egui::epaint::RectShape;
+use eframe::egui::{ self, Align, Color32, CornerRadius, LayerId, Layout, Order, Pos2, Rect, Shape, TextureHandle, TextureId, UiBuilder, Vec2 };
 use eframe::egui_wgpu::RenderState;
 
 use rust_i18n::t;
@@ -94,10 +95,10 @@ impl Viewer
             Self::Audio( viewer ) => viewer.show( &mut Sections::docked( ui ), palette ),
             Self::Model( viewer ) =>
             {
-                viewer.show( &mut Sections::floating( ui, palette ), palette );
+                viewer.show( &mut Sections::floating( ui, &theme::DARK ), palette, view );
                 None
             }
-            Self::Scene( viewer ) => viewer.show( &mut Sections::floating( ui, palette ), palette ),
+            Self::Scene( viewer ) => viewer.show( &mut Sections::floating( ui, &theme::DARK ), palette, view ),
             Self::Map( viewer ) =>
             {
                 viewer.show( &mut Sections::floating( ui, palette ), palette );
@@ -156,6 +157,8 @@ pub struct Sections
 
     plate_fill: Color32,
 
+    /// Blurred view and the rect it covers, shown through the plates.
+    backdrop: Option<(TextureId, Rect)>,
 }
 
 impl Sections
@@ -212,9 +215,29 @@ impl Sections
             footer_right: row( ui, footer, Layout::right_to_left( Align::Center ) ),
             plates:       None,
             plate_fill:   Color32::TRANSPARENT,
+            backdrop:     None,
         };
 
         sections
+    }
+
+    /// `texture` is a blurred copy of what is drawn over `rect`; the plates painted after this show it through.
+    pub fn set_backdrop( &mut self, texture: TextureId, rect: Rect )
+    {
+        self.backdrop = Some( ( texture, rect ) );
+    }
+
+    /// Rounded plate over `rect`: the backdrop under it, if any, toned with `fill`; `opacity` fades both.
+    fn plate( &self, rect: Rect, fill: Color32, opacity: f32 ) -> Shape
+    {
+        let radius = CornerRadius::same( theme::PANEL_RADIUS );
+        let tone   = Shape::Rect( RectShape::filled( rect, radius, fill.gamma_multiply( opacity ) ) );
+        let Some( ( texture, view ) ) = self.backdrop else { return tone };
+
+        let uv    = Rect::from_min_max( ( ( rect.min - view.min ) / view.size() ).to_pos2(), ( ( rect.max - view.min ) / view.size() ).to_pos2() );
+        let glass = RectShape::filled( rect, radius, Color32::WHITE.gamma_multiply( opacity ) ).with_texture( texture, uv );
+
+        Shape::Vec( vec![ Shape::Rect( glass ), tone ] )
     }
 
     pub fn footer_text( &mut self, palette: &Palette, text: &str )
@@ -230,7 +253,7 @@ impl Sections
         let footer = self.footer_right.min_rect();
         let bottom = if footer.width() > 0.0 { footer.min.y - PLATE_PADDING - PLATE_GAP } else { view.max.y - PLATE_INSET };
         let rect   = Rect::from_min_max( Pos2::new( view.max.x - PLATE_INSET - size, bottom - size ), Pos2::new( view.max.x - PLATE_INSET, bottom ) );
-        self.view.painter().rect_filled( rect, CornerRadius::same( theme::PANEL_RADIUS ), self.plate_fill );
+        self.view.painter().add( self.plate( rect, self.plate_fill, 1.0 ) );
 
         rect
     }
@@ -256,7 +279,7 @@ impl Sections
         let center  = Pos2::new( self.view.max_rect().center().x, bottom - PLATE_PADDING - ( galley.size().y / 2.0 ) );
         let text    = Rect::from_center_size( center, galley.size() );
 
-        painter.rect_filled( text.expand( PLATE_PADDING ), CornerRadius::same( theme::PANEL_RADIUS ), palette.plate.gamma_multiply( opacity ) );
+        painter.add( self.plate( text.expand( PLATE_PADDING ), palette.plate, opacity ) );
         painter.galley( text.min, galley, palette.text );
     }
 }
@@ -287,8 +310,7 @@ impl Drop for Sections
             {
                 continue;
             }
-            let plate = egui::epaint::RectShape::filled( content.expand( PLATE_PADDING ), CornerRadius::same( theme::PANEL_RADIUS ), self.plate_fill );
-            part.painter().set( slot, plate );
+            part.painter().set( slot, self.plate( content.expand( PLATE_PADDING ), self.plate_fill, 1.0 ) );
         }
     }
 }
