@@ -12,6 +12,7 @@
 # Local cargo overrides
 .cargo/credentials
 .cargo/credentials.toml
+.cargo/config.toml
 
 # IDE / OS
 .idea/
