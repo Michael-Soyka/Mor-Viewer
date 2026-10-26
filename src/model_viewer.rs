@@ -735,8 +735,10 @@ impl ModelViewer
     /// `shown` picks the overlays: frame time, statistics, coordinates and the axis gizmo.
     pub fn show( &mut self, sections: &mut Sections, palette: &Palette, shown: &ViewerSettings )
     {
+        // Test: the plates stay dark over the blurred view in either theme.
+        let plate   = &theme::DARK;
         let changed = self.options != self.defaults;
-        let render  = widgets::icon_toggle( &mut sections.action_left, palette, icons::RENDER, changed ).on_hover_text( t!( "model.render" ) );
+        let render  = widgets::icon_toggle( &mut sections.action_left, plate, icons::RENDER, changed ).on_hover_text( t!( "model.render" ) );
         egui::Popup::menu( &render ).close_behavior( egui::PopupCloseBehavior::CloseOnClickOutside ).show(
             |ui|
             {
@@ -769,7 +771,7 @@ impl ModelViewer
         // Only the shaded mode is lit.
         if self.mode == RenderMode::Shaded
         {
-            let light = widgets::icon_toggle( &mut sections.action_left, palette, icons::LIGHT, self.light.enabled ).on_hover_text( t!( "model.lighting" ) );
+            let light = widgets::icon_toggle( &mut sections.action_left, plate, icons::LIGHT, self.light.enabled ).on_hover_text( t!( "model.lighting" ) );
             egui::Popup::menu( &light ).close_behavior( egui::PopupCloseBehavior::CloseOnClickOutside ).show(
                 |ui|
                 {
@@ -787,7 +789,7 @@ impl ModelViewer
         }
         for mode in RenderMode::ALL.into_iter().rev()
         {
-            let response = widgets::icon_toggle( &mut sections.action_right, palette, mode.icon(), self.mode == mode ).on_hover_text( t!( mode.key() ) );
+            let response = widgets::icon_toggle( &mut sections.action_right, plate, mode.icon(), self.mode == mode ).on_hover_text( t!( mode.key() ) );
             if response.clicked() && self.mode != mode
             {
                 self.mode = mode;
@@ -852,15 +854,15 @@ impl ModelViewer
         {
             segments.push( i18n::count( "model.missing", self.missing.len() ) );
         }
-        sections.footer_segments( palette, &segments );
+        sections.footer_segments( plate, &segments );
         if !self.missing.is_empty()
         {
-            sections.footer_left.label( egui::RichText::new( "?" ).color( palette.menu_text ) ).on_hover_text( self.missing.join( "\n" ) );
+            sections.footer_left.label( egui::RichText::new( "?" ).color( plate.menu_text ) ).on_hover_text( self.missing.join( "\n" ) );
         }
         if let Some( [ x, y, z ] ) = self.camera.position().filter( |_| shown.show_coordinates )
         {
             let position = [ format!( "x {x:.0}" ), format!( "y {y:.0}" ), format!( "z {z:.0}" ) ];
-            sections.footer_right_segments( palette, &position );
+            sections.footer_right_segments( plate, &position );
         }
         if let Camera::Fly( _ ) = self.camera
         {
@@ -870,7 +872,7 @@ impl ModelViewer
             if left > 0.0
             {
                 let opacity = ( left / HINT_FADE ).min( 1.0 ) as f32;
-                sections.hint( palette, &t!( "model.fly_controls" ), opacity );
+                sections.hint( plate, &t!( "model.fly_controls" ), opacity );
                 sections.view.ctx().request_repaint();
             }
         }

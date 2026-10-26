@@ -5,6 +5,8 @@
 
 mod app;
 mod audio_viewer;
+mod blur;
+mod culling;
 mod font_viewer;
 mod gltf;
 mod hex_viewer;
