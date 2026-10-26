@@ -2,10 +2,10 @@ use std::ops::Range;
 
 use eframe::egui::{ Align2, Color32, FontId, Pos2, ScrollArea, Sense, TextFormat, TextStyle, Vec2, text::LayoutJob };
 
-use crate::preview::DecodedText;
-use crate::theme::{ Palette, Syntax };
+use crate::data::preview::DecodedText;
+use crate::ui::theme::{ Palette, Syntax };
+use crate::ui::widgets::{ from_f32, to_f32 };
 use crate::viewer::Sections;
-use crate::widgets::{ from_f32, to_f32 };
 
 const PADDING:    f32  = 6.0;
 const ROW_GAP:    f32  = 2.0;

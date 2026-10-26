@@ -3,31 +3,13 @@
 
 #![ cfg_attr( not( debug_assertions ), windows_subsystem = "windows" ) ]
 
-mod animation;
 mod app;
-mod audio_viewer;
-mod blur;
-mod culling;
-mod font_viewer;
-mod gltf;
-mod hex_viewer;
+mod data;
 mod i18n;
-mod icons;
-mod library;
-mod map_viewer;
-mod model;
-mod model_viewer;
-mod scene;
-mod scene_viewer;
-mod preview;
+mod render;
 mod settings;
-mod texture_viewer;
-mod theme;
-mod title_bar;
+mod ui;
 mod viewer;
-mod weather;
-mod widgets;
-mod xml_viewer;
 
 use std::path::PathBuf;
 use std::sync::Arc;

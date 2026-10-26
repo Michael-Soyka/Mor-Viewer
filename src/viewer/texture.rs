@@ -5,10 +5,10 @@ use eframe::egui::{ self, Color32, ColorImage, Pos2, Rect, ScrollArea, Sense, Te
 use mortex::{ Image, Texture };
 
 use rust_i18n::t;
-use crate::preview::{ self, Channels };
-use crate::theme::Palette;
+use crate::data::preview::{ self, Channels };
+use crate::ui::theme::Palette;
+use crate::ui::widgets::{ self, Zoom };
 use crate::viewer::Sections;
-use crate::widgets::{ self, Zoom };
 
 const ZOOM_MIN:        f32       = 0.05;
 const ZOOM_MAX:        f32       = 16.0;

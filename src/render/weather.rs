@@ -1,8 +1,8 @@
 //! Time of day as the game's `weather.bin` runs it: four looks of sky, light and fog,
 //! and the hours the script moves between them.
 
-use crate::model_viewer::FindTexture;
-use crate::widgets::to_f32;
+use crate::ui::widgets::to_f32;
+use crate::render::texture::FindTexture;
 
 /// Sky texture sets, in the order their layers are uploaded; a face is `{set}_{face}.tex`.
 const SETS: [&str; 7] = [ "night", "night_rain", "dawn", "dawn_rain", "day", "day_clear", "day_rain" ];

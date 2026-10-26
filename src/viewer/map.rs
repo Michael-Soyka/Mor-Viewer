@@ -8,10 +8,10 @@ use mortex::Texture;
 
 use rust_i18n::t;
 use crate::i18n;
-use crate::texture_viewer::to_usize;
-use crate::theme::Palette;
+use crate::ui::theme::Palette;
+use crate::ui::widgets::{ self, Zoom, to_f32 };
 use crate::viewer::Sections;
-use crate::widgets::{ self, Zoom, to_f32 };
+use crate::viewer::texture::to_usize;
 
 const ZOOM_MIN:       f32     = 0.05;
 const ZOOM_MAX:       f32     = 16.0;
@@ -236,17 +236,17 @@ fn upload_picture( ctx: &egui::Context, data: &[u8] ) -> Option<TextureHandle>
 /// Name on a plate centered above `anchor`.
 fn paint_label( painter: &egui::Painter, palette: &Palette, label: &str, anchor: Pos2 )
 {
-    let galley = painter.layout_no_wrap( label.to_owned(), egui::FontId::proportional( crate::theme::TEXT_SIZE ), palette.text );
+    let galley = painter.layout_no_wrap( label.to_owned(), egui::FontId::proportional( crate::ui::theme::TEXT_SIZE ), palette.text );
     let text   = Rect::from_center_size( anchor - Vec2::new( 0.0, ( galley.size().y / 2.0 ) + LABEL_GAP ), galley.size() );
 
-    painter.rect( text.expand( LABEL_PADDING ), egui::CornerRadius::same( crate::theme::CONTROL_RADIUS ), palette.window, Stroke::new( 1.0, palette.border ), egui::StrokeKind::Outside );
+    painter.rect( text.expand( LABEL_PADDING ), egui::CornerRadius::same( crate::ui::theme::CONTROL_RADIUS ), palette.window, Stroke::new( 1.0, palette.border ), egui::StrokeKind::Outside );
     painter.galley( text.min, galley, palette.text );
 }
 
 /// `@<area>` lines from [`LABELS_FILE`], each with the lines up to the next one as the name.
 fn area_labels( data: &[u8] ) -> HashMap<u32, String>
 {
-    let text       = crate::preview::decode_text( data ).text;
+    let text       = crate::data::preview::decode_text( data ).text;
     let mut labels = HashMap::new();
     let mut key    = None;
 

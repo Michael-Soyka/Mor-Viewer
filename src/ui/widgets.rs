@@ -1,8 +1,8 @@
 use eframe::egui::{ self, Align2, Color32, CornerRadius, FontId, Image, ImageSource, Pos2, Rect, Response, Sense, Stroke, Vec2 };
 
 use rust_i18n::t;
-use crate::icons;
-use crate::theme::{ self, Palette };
+use crate::ui::icons;
+use crate::ui::theme::{ self, Palette };
 
 pub const ICON_SIZE:  f32 = 10.0;
 pub const ROW_HEIGHT: f32 = 23.0;

@@ -12,18 +12,17 @@ use mormesh::gltf::Gltf;
 use morscene::Scene;
 
 use rust_i18n::t;
-use crate::gltf;
+use crate::data::gltf;
+use crate::data::library::{ FileKey, Library, NodeKey, Row, RowKind, file_name };
+use crate::data::preview::Kind;
 use crate::i18n;
-use crate::icons;
-use crate::library::{ FileKey, Library, NodeKey, Row, RowKind, file_name };
-use crate::model_viewer::{ self, ModelThumbnail };
-use crate::preview::Kind;
 use crate::settings::{ self, AboutInfo, Page, Settings, SidebarLayout };
-use crate::texture_viewer;
-use crate::theme::{ self, Palette };
-use crate::title_bar::{ self, TitleBar };
+use crate::ui::icons;
+use crate::ui::theme::{ self, Palette };
+use crate::ui::title_bar::{ self, TitleBar };
+use crate::ui::widgets::{ self, ROW_GAP, ROW_HEIGHT, RowIcon, to_f32 };
 use crate::viewer::{ self, Resources, Viewer };
-use crate::widgets::{ self, ROW_GAP, ROW_HEIGHT, RowIcon, to_f32 };
+use crate::viewer::model::ModelThumbnail;
 
 const GUTTER:                 f32   = 4.0;
 const SIDEBAR_WIDTH:          f32   = 200.0;
@@ -67,10 +66,10 @@ impl Export
     /// Format a file converts to besides its raw bytes: textures to PNG, meshes and scenes to glTF.
     fn conversion( name: &str ) -> Option<Self>
     {
-        match crate::preview::kind_of( name )
+        match crate::data::preview::kind_of( name )
         {
             Kind::Texture => Some( Self::Png ),
-            Kind::Model if crate::preview::has_extension( name, mormesh::EXTENSION ) => Some( Self::Gltf ),
+            Kind::Model if crate::data::preview::has_extension( name, mormesh::EXTENSION ) => Some( Self::Gltf ),
             Kind::Scene => Some( Self::Gltf ),
             _ => None,
         }
@@ -208,7 +207,7 @@ impl ViewerApp
             scroll_to_row: None,
             list_offset:   0.0,
             list_height:   0.0,
-            checker:       texture_viewer::new_checker( &cc.egui_ctx ),
+            checker:       viewer::texture::new_checker( &cc.egui_ctx ),
             render_state:  cc.wgpu_render_state.clone(),
             message:       None,
             frame_end:     None,
@@ -474,8 +473,8 @@ impl ViewerApp
                 name,
                 |target|
                 {
-                    let image = texture_viewer::decode( &entry.path, &data )?;
-                    texture_viewer::save_png( &image.rgba, image.width, image.height, target )
+                    let image = viewer::texture::decode( &entry.path, &data )?;
+                    viewer::texture::save_png( &image.rgba, image.width, image.height, target )
                 }
             ),
             Export::Gltf => save_gltf_as( name, &data, &self.library ),
@@ -750,12 +749,12 @@ impl ViewerApp
 
         match kind
         {
-            Kind::Texture => texture_viewer::thumbnail( ctx, &entry.path, &data, 64 ).map( Thumbnail::Image ),
-            Kind::Model if crate::preview::has_extension( &entry.path, mormesh::EXTENSION ) =>
+            Kind::Texture => viewer::texture::thumbnail( ctx, &entry.path, &data, 64 ).map( Thumbnail::Image ),
+            Kind::Model if crate::data::preview::has_extension( &entry.path, mormesh::EXTENSION ) =>
             {
                 let state     = self.render_state.as_ref()?;
                 let find_file = |name: &str| self.library.read_by_name( name );
-                model_viewer::thumbnail( state, &data, &find_file, MODEL_THUMB_PIXELS ).map( Thumbnail::Model )
+                viewer::model::thumbnail( state, &data, &find_file, MODEL_THUMB_PIXELS ).map( Thumbnail::Model )
             }
             _ => None,
         }
@@ -1071,12 +1070,12 @@ fn save_gltf_as( name: &str, data: &[u8], library: &Library ) -> Option<String>
     let png    = |texture: &str|
     {
         let ( path, data ) = library.read_by_name( texture )?;
-        let image = texture_viewer::decode( &path, &data ).ok()?;
+        let image = viewer::texture::decode( &path, &data ).ok()?;
 
-        texture_viewer::encode_png( &image ).ok()
+        viewer::texture::encode_png( &image ).ok()
     };
 
-    let exported = match crate::preview::kind_of( name )
+    let exported = match crate::data::preview::kind_of( name )
     {
         Kind::Scene => Scene::load( name, read ).map( |scene| morscene::gltf::export( &scene, stem, read, read, png ).gltf ).map_err( |err| err.to_string() ),
         _ => Mesh::parse( data ).map( |mesh| Gltf::from_mesh( &mesh, stem, png ) ).map_err( |err| err.to_string() ),
@@ -1174,15 +1173,15 @@ fn tab_menu( response: &egui::Response, palette: &Palette, index: usize, name: &
 
 fn file_icon( name: &str ) -> egui::ImageSource<'static>
 {
-    match crate::preview::kind_of( name )
+    match crate::data::preview::kind_of( name )
     {
         Kind::Texture | Kind::Map => icons::TEXTURE,
         Kind::Font => icons::FONT,
         Kind::Text => icons::TEXT,
-        Kind::Scene if crate::preview::has_extension( name, morscene::OUTDOOR_EXTENSION ) => icons::WORLD,
+        Kind::Scene if crate::data::preview::has_extension( name, morscene::OUTDOOR_EXTENSION ) => icons::WORLD,
         Kind::Scene => icons::INTERIOR,
         Kind::Model => icons::MESH,
-        Kind::Binary if crate::preview::has_extension( name, crate::preview::PATH_EXTENSION ) => icons::PATH,
+        Kind::Binary if crate::data::preview::has_extension( name, crate::data::preview::PATH_EXTENSION ) => icons::PATH,
         Kind::Audio => icons::AUDIO,
         Kind::Binary => icons::BINARY,
     }

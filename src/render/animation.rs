@@ -5,9 +5,9 @@ use eframe::egui;
 use mormesh::layout::character::{ CharacterMesh, Keyframe };
 use rust_i18n::t;
 
-use crate::model::{ Vertex, to_usize };
-use crate::theme::{ self, Palette };
-use crate::widgets::{ self, from_f32, to_f32 };
+use crate::render::model::{ Vertex, to_usize };
+use crate::ui::theme::{ self, Palette };
+use crate::ui::widgets::{ self, from_f32, to_f32 };
 
 /// Keys lie on a grid of 1/60 s.
 const FPS: f32 = 60.0;

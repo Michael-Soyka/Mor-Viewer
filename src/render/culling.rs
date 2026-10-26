@@ -5,7 +5,7 @@ use std::sync::atomic::{ AtomicU8, Ordering };
 use eframe::egui_wgpu::wgpu;
 use wgpu::util::DeviceExt;
 
-use crate::model::{ Draw, Model, to_u32, to_usize };
+use crate::render::model::{ Draw, Model, to_u32, to_usize };
 
 const WORKGROUP: u32 = 64;
 const TILE:      u32 = 8;
@@ -166,12 +166,12 @@ impl Culling
         let cull_source = wgpu::ShaderModuleDescriptor
         {
             label:  Some( "culling" ),
-            source: wgpu::ShaderSource::Wgsl( include_str!( "culling.wgsl" ).into() ),
+            source: wgpu::ShaderSource::Wgsl( include_str!( "shaders/culling.wgsl" ).into() ),
         };
         let pyramid_source = wgpu::ShaderModuleDescriptor
         {
             label:  Some( "pyramid" ),
-            source: wgpu::ShaderSource::Wgsl( include_str!( "hiz.wgsl" ).into() ),
+            source: wgpu::ShaderSource::Wgsl( include_str!( "shaders/hiz.wgsl" ).into() ),
         };
         let cull_shader    = device.create_shader_module( cull_source );
         let pyramid_shader = device.create_shader_module( pyramid_source );

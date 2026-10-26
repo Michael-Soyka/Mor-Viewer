@@ -9,10 +9,11 @@ use morscene::Scene;
 use morscene::actor::{ ActorFile, LightActor };
 use morscene::path::PathFinding;
 
-use crate::library::Library;
-use crate::model::{ self, Model };
-use crate::model_viewer::{ self, PathLines, SceneLight, Textures };
-use crate::weather::{ self, SkyImages };
+use crate::data::library::Library;
+use crate::render::model::{ self, Model };
+use crate::render::paths::PathLines;
+use crate::render::texture::{ Textures, decode_textures };
+use crate::render::weather::{ self, SkyImages };
 
 /// Wider textures load from a smaller mip: a city uses hundreds of them.
 const TEXTURE_LIMIT: u32 = 512;
@@ -28,6 +29,17 @@ const PATH_LIFT: f32 = 4.0;
 
 const PATH_CELL_COLOR: [f32; 3] = [ 0.2, 0.8, 0.9 ];
 const PATH_LINK_COLOR: [f32; 3] = [ 1.0, 0.6, 0.2 ];
+
+/// A light source of a scene, drawn as a marker over the view.
+pub struct SceneLight
+{
+    /// Actor the light belongs to; lights of a group share it.
+    pub name:     String,
+    pub id:       u32,
+    pub position: [f32; 3],
+    pub color:    Color32,
+    pub radius:   f32,
+}
 
 /// Meshes read so far, for the loading message.
 #[ derive( Default ) ]
@@ -105,7 +117,7 @@ pub fn load( archives: &[PathBuf], file: &str, progress: &Progress ) -> Result<L
     drop( meshes );
 
     let find_texture          = |name: &str| library.read_by_name( name );
-    let ( textures, missing ) = model_viewer::decode_textures( &model, &find_texture, Some( TEXTURE_LIMIT ) );
+    let ( textures, missing ) = decode_textures( &model, &find_texture, Some( TEXTURE_LIMIT ) );
     let start                 = scene.points.iter().find( |point| point.name.eq_ignore_ascii_case( START_POINT ) ).map( |point| ( eye( point.position ), point.direction ) );
 
     let paths  = scene.path_finding.as_deref().and_then( |file| path_lines( &read( file )? ) );
