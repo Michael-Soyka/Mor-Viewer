@@ -1,0 +1,195 @@
+_version: 1
+
+# Plural forms: `one` for 1, 21; `few` for 2-4, 22-24; `many` for 5-20, 0.
+
+menu:
+  file: Файл
+  open_folder: Открыть папку data…
+  open_archive: Открыть архивы…
+  preferences: Настройки…
+  exit: Выход
+  view: Вид
+  list: Список
+  thumbnails: Миниатюры
+
+context:
+  open: Открыть
+  close: Закрыть
+  close_others: Закрыть остальные
+  close_archive: Закрыть архив
+  export_raw: Сохранить исходный файл…
+  export_png: Экспорт в PNG…
+  export_gltf: Экспорт в glTF…
+
+sidebar:
+  search: Поиск
+
+blank:
+  open_folder: 'Откройте папку data игры через меню "Файл"'
+  select_file: Выберите файл слева
+
+status:
+  no_archives: В %{path} нет архивов .vfs
+  saved: Сохранено в %{path}
+  archives:
+    one: "%{count} архив"
+    few: "%{count} архива"
+    many: "%{count} архивов"
+  bytes:
+    one: "%{count} байт"
+    few: "%{count} байта"
+    many: "%{count} байт"
+
+zoom:
+  fit: Вписать
+
+texture:
+  mip: Мип %{index}
+  mip_size: Мип %{index}  %{width}×%{height}
+  face: Грань %{name}
+
+font:
+  text: Текст
+  alphabet: Алфавит
+  glyphs: Глифы
+  glyph_info: "%{char} U+%{code} · %{width}×%{height} · смещение %{x}, %{y} · шаг %{advance}"
+  glyph_count:
+    one: "%{count} глиф"
+    few: "%{count} глифа"
+    many: "%{count} глифов"
+
+hex:
+  decoded: Текст
+  bytes:
+    one: "%{count} байт"
+    few: "%{count} байта"
+    many: "%{count} байт"
+
+xml:
+  lines:
+    one: "%{count} строка"
+    few: "%{count} строки"
+    many: "%{count} строк"
+
+audio:
+  format: Ogg Vorbis · %{rate} Гц · %{channels}
+  mono: моно
+  stereo: стерео
+  channels:
+    one: "%{count} канал"
+    few: "%{count} канала"
+    many: "%{count} каналов"
+  no_channels: нет звуковых каналов
+  no_rate: нулевая частота дискретизации
+
+model:
+  static: Статичный меш
+  movable: Подвижный меш
+  raw: Простой меш
+  land: Ландшафт
+  scene: Сцена
+  interior: Интерьер
+  character: Персонаж
+  water: Вода
+  detail: 'Растительность: экземпляры %{count} мешей по сетке, пока не отображается'
+  wireframe: Каркас
+  solid: Сплошной
+  material: Материал
+  shaded: С освещением
+  lighting: Освещение
+  render: Отрисовка
+  no_cull: Без отсечения граней
+  occlusion: Скрывать заслонённое
+  reflections: Отражения
+  time_of_day: Время суток
+  hour: Час
+  street_lights: Фонари по времени суток
+  weather_clear: Ясно
+  weather_cloudy: Пасмурно
+  weather_rain: Дождь
+  visible_clusters: "Видно кластеров: %{visible} / %{total}"
+  drawn_triangles: "Отрисовано треугольников: %{count}"
+  frame_time: "%{fps} FPS · %{ms} мс"
+  frame: "Кадр %{current}/%{total}"
+  unsupported: "Устройство не поддерживает: %{list}"
+  lightmaps: Лайтмапы
+  fog: Туман
+  fog_start: Начало
+  fog_end: Конец
+  fog_color: Цвет
+  light_sources: Источники света
+  light_tip: "Название: %{name}\nЦвет: %{color}\nРадиус: %{radius}\nПозиция: %{position}"
+  path_cells: Навигационные ячейки
+  path_links: Граф путей
+  fly_controls: "Мышь: обзор · WASD · Q/E вниз/вверх · Shift быстрее · колесо: скорость"
+  azimuth: Поворот
+  elevation: Угол
+  needs_wgpu: Для 3D нужен рендер wgpu
+  surfaces:
+    one: "%{count} поверхность"
+    few: "%{count} поверхности"
+    many: "%{count} поверхностей"
+  vertices:
+    one: "%{count} вершина"
+    few: "%{count} вершины"
+    many: "%{count} вершин"
+  triangles:
+    one: "%{count} треугольник"
+    few: "%{count} треугольника"
+    many: "%{count} треугольников"
+  missing:
+    one: "нет %{count} текстуры"
+    few: "нет %{count} текстур"
+    many: "нет %{count} текстур"
+
+scene:
+  loading: "Загрузка сцены: %{done} / %{total} мешей"
+  failed: Загрузчик сцены упал
+
+map:
+  areas: Области
+  districts: Районы
+  area: "Область %{id}"
+  no_picture: "%{name} не найден"
+  district_count:
+    one: "%{count} район"
+    few: "%{count} района"
+    many: "%{count} районов"
+  area_count:
+    one: "%{count} область"
+    few: "%{count} области"
+    many: "%{count} областей"
+
+image:
+  unsupported: неподдерживаемый формат изображения
+
+settings:
+  back: Назад
+  general: Общие
+  theming: Оформление
+  about: О программе
+  game: Игра
+  viewer: Просмотрщик
+  backend: Графический API
+  backend_hint: Новый API начнёт работать после перезапуска.
+  vsync: Вертикальная синхронизация
+  fps_limit: Ограничение FPS
+  show_fps: Показывать FPS
+  show_coordinates: Показывать координаты
+  show_stats: Показывать статистику сцены
+  show_orientation: Показывать положение в пространстве
+  data_folder: Папка data
+  data_folder_hint: Не указана. Без неё приложение запускается пустым.
+  browse: Обзор…
+  clear: Сбросить
+  language: Язык
+  sidebar: Вид боковой панели
+  hex_bytes: "Hex: байт в строке"
+  theme: Тема
+  dark: Тёмная
+  light: Светлая
+  system_theme: Как в системе
+  scale: Масштаб интерфейса
+  description: 'Просмотрщик архивов "Мор. Утопия" (Pathologic).'
+  renderer: "Рендер: %{name}"
+  font: "Шрифт: JetBrains Mono (SIL Open Font License)."

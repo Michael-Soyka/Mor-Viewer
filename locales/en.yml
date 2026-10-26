@@ -1,0 +1,195 @@
+_version: 1
+
+# Plural keys have `one`, `few` and `many` forms; English uses `few` = `many`.
+
+menu:
+  file: File
+  open_folder: Open data folder…
+  open_archive: Open archives…
+  preferences: Preferences…
+  exit: Exit
+  view: View
+  list: List
+  thumbnails: Thumbnails
+
+context:
+  open: Open
+  close: Close
+  close_others: Close Others
+  close_archive: Close archive
+  export_raw: Export Raw…
+  export_png: Export to PNG…
+  export_gltf: Export to glTF…
+
+sidebar:
+  search: Search
+
+blank:
+  open_folder: Open the game data folder via File
+  select_file: Select a file on the left
+
+status:
+  no_archives: No .vfs archives in %{path}
+  saved: Saved %{path}
+  archives:
+    one: "%{count} archive"
+    few: "%{count} archives"
+    many: "%{count} archives"
+  bytes:
+    one: "%{count} Byte"
+    few: "%{count} Bytes"
+    many: "%{count} Bytes"
+
+zoom:
+  fit: Fit
+
+texture:
+  mip: Mip %{index}
+  mip_size: Mip %{index}  %{width}×%{height}
+  face: Face %{name}
+
+font:
+  text: Text
+  alphabet: Alphabet
+  glyphs: Glyphs
+  glyph_info: "%{char} U+%{code} · %{width}×%{height} · offset %{x}, %{y} · advance %{advance}"
+  glyph_count:
+    one: "%{count} glyph"
+    few: "%{count} glyphs"
+    many: "%{count} glyphs"
+
+hex:
+  decoded: Decoded text
+  bytes:
+    one: "%{count} byte"
+    few: "%{count} bytes"
+    many: "%{count} bytes"
+
+xml:
+  lines:
+    one: "%{count} line"
+    few: "%{count} lines"
+    many: "%{count} lines"
+
+audio:
+  format: Ogg Vorbis · %{rate} Hz · %{channels}
+  mono: mono
+  stereo: stereo
+  channels:
+    one: "%{count} channel"
+    few: "%{count} channels"
+    many: "%{count} channels"
+  no_channels: no audio channels
+  no_rate: zero sample rate
+
+model:
+  static: Static Mesh
+  movable: Movable Mesh
+  raw: Raw Mesh
+  land: Land Mesh
+  scene: Scene
+  interior: Interior
+  character: Character
+  water: Water
+  detail: 'Vegetation: instances of %{count} meshes over a grid, not shown yet'
+  wireframe: Wireframe
+  solid: Solid
+  material: Material
+  shaded: Shaded
+  lighting: Lighting
+  render: Render
+  no_cull: No face culling
+  occlusion: Hide occluded geometry
+  reflections: Reflections
+  time_of_day: Time of day
+  hour: Hour
+  street_lights: Street lights follow the time of day
+  weather_clear: Clear
+  weather_cloudy: Cloudy
+  weather_rain: Rain
+  visible_clusters: "Visible clusters: %{visible} / %{total}"
+  drawn_triangles: "Triangles drawn: %{count}"
+  frame_time: "%{fps} FPS · %{ms} ms"
+  frame: "Frame %{current}/%{total}"
+  unsupported: "The device does not support: %{list}"
+  lightmaps: Lightmaps
+  fog: Fog
+  fog_start: Start
+  fog_end: End
+  fog_color: Color
+  light_sources: Light sources
+  light_tip: "Name: %{name}\nColor: %{color}\nRadius: %{radius}\nPosition: %{position}"
+  path_cells: Navigation cells
+  path_links: Path graph
+  fly_controls: "Drag to look · WASD · Q/E down/up · Shift faster · wheel: speed"
+  azimuth: Rotation
+  elevation: Angle
+  needs_wgpu: 3D view needs the wgpu renderer
+  surfaces:
+    one: "%{count} surface"
+    few: "%{count} surfaces"
+    many: "%{count} surfaces"
+  vertices:
+    one: "%{count} vertex"
+    few: "%{count} vertices"
+    many: "%{count} vertices"
+  triangles:
+    one: "%{count} triangle"
+    few: "%{count} triangles"
+    many: "%{count} triangles"
+  missing:
+    one: "%{count} texture missing"
+    few: "%{count} textures missing"
+    many: "%{count} textures missing"
+
+scene:
+  loading: "Loading the scene: %{done} / %{total} meshes"
+  failed: The scene loader crashed
+
+map:
+  areas: Areas
+  districts: Districts
+  area: "Area %{id}"
+  no_picture: "%{name} not found"
+  district_count:
+    one: "%{count} district"
+    few: "%{count} districts"
+    many: "%{count} districts"
+  area_count:
+    one: "%{count} area"
+    few: "%{count} areas"
+    many: "%{count} areas"
+
+image:
+  unsupported: unsupported image format
+
+settings:
+  back: Back
+  general: General
+  theming: Theming
+  about: About
+  game: Game
+  viewer: Viewer
+  backend: Graphics API
+  backend_hint: A new API takes effect after a restart.
+  vsync: Vertical sync
+  fps_limit: FPS limit
+  show_fps: Show FPS
+  show_coordinates: Show coordinates
+  show_stats: Show scene statistics
+  show_orientation: Show orientation
+  data_folder: Data folder
+  data_folder_hint: Not set. Without it the app starts empty.
+  browse: Browse…
+  clear: Clear
+  language: Language
+  sidebar: Sidebar view
+  hex_bytes: "Hex: bytes per row"
+  theme: Theme
+  dark: Dark
+  light: Light
+  system_theme: System
+  scale: Interface scale
+  description: Viewer for Pathologic (Mor. Utopia) archives.
+  renderer: "Renderer: %{name}"
+  font: "Font: JetBrains Mono (SIL Open Font License)."
