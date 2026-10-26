@@ -12,6 +12,7 @@ use morscene::path::PathFinding;
 use crate::library::Library;
 use crate::model::{ self, Model };
 use crate::model_viewer::{ self, PathLines, SceneLight, Textures };
+use crate::weather::{ self, SkyImages };
 
 /// Wider textures load from a smaller mip: a city uses hundreds of them.
 const TEXTURE_LIMIT: u32 = 512;
@@ -50,6 +51,12 @@ pub struct LoadedScene
     /// Game position and direction of the start point.
     pub start: Option<([f32; 3], [f32; 3])>,
 
+    /// The game's sky, for outdoor scenes.
+    pub sky: Option<SkyImages>,
+
+    /// Lights by actor id: those in the street lights' group, and those that start switched off.
+    pub street_lights: HashSet<u32>,
+    pub lights_off:    HashSet<u32>,
 }
 
 /// Every mesh the scene's actors and terrain name, merged into one model.
@@ -63,6 +70,8 @@ pub fn load( archives: &[PathBuf], file: &str, progress: &Progress ) -> Result<L
 
     let actors: Vec<(&str, Vec<u8>)> = scene.actors.iter().filter_map( |actor| actor.name.as_deref() ).filter_map( |name| Some( ( name, read( name )? ) ) ).collect();
     let lights = actors.iter().flat_map( |( name, data )| actor_lights( name, data ) ).collect();
+
+    let ( street_lights, lights_off ) = light_roles( &scene, &actors, &read );
 
     let mut names: Vec<String> = actors.iter().filter_map( |( _, data )| actor_mesh( data ) ).collect();
     names.extend( scene.land.as_deref().and_then( |land| actor_mesh( &read( land )? ) ) );
@@ -100,7 +109,8 @@ pub fn load( archives: &[PathBuf], file: &str, progress: &Progress ) -> Result<L
     let start                 = scene.points.iter().find( |point| point.name.eq_ignore_ascii_case( START_POINT ) ).map( |point| ( eye( point.position ), point.direction ) );
 
     let paths  = scene.path_finding.as_deref().and_then( |file| path_lines( &read( file )? ) );
-    let loaded = LoadedScene { model, textures, missing, lights, paths, ambient: scene.ambient, start };
+    let sky    = scene.ambient.is_none().then( || SkyImages::load( &find_texture ) ).flatten();
+    let loaded = LoadedScene { model, textures, missing, lights, paths, ambient: scene.ambient, start, sky, street_lights, lights_off };
 
     Ok( loaded )
 }
@@ -161,6 +171,63 @@ fn path_lines( data: &[u8] ) -> Option<PathLines>
     let lines = PathLines { vertices, cells, links };
 
     Some( lines )
+}
+
+/// Light actors by their extras: those in the street lights' group, and those the extras switch off.
+fn light_roles( scene: &Scene, actors: &[(&str, Vec<u8>)], read: &dyn Fn( &str ) -> Option<Vec<u8>> ) -> (HashSet<u32>, HashSet<u32>)
+{
+    let ids: HashMap<&str, u32> = actors
+        .iter()
+        .filter_map( |&( name, ref data )| Some( ( name, light_id( data )? ) ) )
+        .collect();
+
+    let mut extras = HashMap::<&str, LightExtras>::new();
+    let mut street = HashSet::new();
+    let mut off    = HashSet::new();
+
+    for actor in &scene.actors
+    {
+        let ( Some( name ), Some( file ) ) = ( actor.name.as_deref(), actor.extras.as_deref() ) else { continue };
+        let Some( &id ) = ids.get( name ) else { continue };
+        let roles = *extras.entry( file ).or_insert_with( || read( file ).map_or( LightExtras::default(), |data| LightExtras::parse( &data ) ) );
+        if roles.group == Some( weather::STREET_GROUP )
+        {
+            street.insert( id );
+        }
+        if roles.off
+        {
+            off.insert( id );
+        }
+    }
+
+    ( street, off )
+}
+
+fn light_id( data: &[u8] ) -> Option<u32>
+{
+    let Ok( ActorFile::Light( actor ) ) = ActorFile::parse( data ) else { return None };
+
+    Some( actor.id )
+}
+
+/// What a light's extras file says of it: `<Group id="…"/>` and `<on>0</on>`.
+#[ derive( Clone, Copy, Default ) ]
+struct LightExtras
+{
+    group: Option<u32>,
+    off:   bool,
+}
+
+impl LightExtras
+{
+    fn parse( data: &[u8] ) -> Self
+    {
+        let text  = WINDOWS_1251.decode_without_bom_handling( data ).0;
+        let group = text.split_once( "<Group" ).and_then( |( _, rest )| rest.split( '"' ).nth( 1 ) ).and_then( |id| id.trim().parse().ok() );
+        let off   = text.replace( char::is_whitespace, "" ).contains( "<on>0</on>" );
+
+        Self { group, off }
+    }
 }
 
 /// Lights of a light actor: the light itself, or each light of a group.

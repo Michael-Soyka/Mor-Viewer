@@ -77,5 +77,5 @@ fn viewer( state: &RenderState, loaded: LoadedScene ) -> ModelViewer
         None => Camera::framing( &loaded.model ),
     };
 
-    ModelViewer::from_decoded( state, &loaded.model, &loaded.textures, loaded.missing, camera ).with_lightmaps().with_ambient( loaded.ambient ).with_lights( loaded.lights ).with_paths( loaded.paths.as_ref() )
+    ModelViewer::from_decoded( state, &loaded.model, &loaded.textures, loaded.missing, camera ).with_lightmaps().with_occlusion().with_ambient( loaded.ambient ).with_lights( loaded.lights ).with_paths( loaded.paths.as_ref() ).with_sky( loaded.sky.as_ref() ).with_street_lights( loaded.street_lights, &loaded.lights_off )
 }

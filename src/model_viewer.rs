@@ -15,7 +15,8 @@ use crate::model::{ Model, Vertex, to_usize };
 use crate::settings::ViewerSettings;
 use crate::theme::{ self, Palette };
 use crate::viewer::Sections;
-use crate::widgets::{ self, to_f32 };
+use crate::weather::{ self, SkyImages, Weather };
+use crate::widgets::{ self, from_f32, to_f32 };
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -78,8 +79,22 @@ const PIVOT_AXES: [([f32; 3], Color32); 3] =
     ( [ 0.0, 0.0, -1.0 ], Color32::from_rgb( 0x56, 0x93, 0xE3 ) ),
 ];
 
-/// Frame uniforms: view-projection, light, params, eye.
-type FrameUniforms = [f32; 40];
+/// Frame uniforms: view-projection, light, params, eye, ambient, fog, clip plane, water, background, sun, sky layers;
+/// `Frame` in `model.wgsl`.
+const FRAME_FLOATS: usize = 60;
+
+/// Hour a level with the game's sky opens at.
+const START_HOUR: f32 = 13.0;
+type FrameUniforms = [f32; FRAME_FLOATS];
+
+/// Corners of the sky cube's triangles, see `vs_sky` in `sky.wgsl`.
+const SKY_VERTICES: u32 = 36;
+
+/// Reflections are drawn at this fraction of the frame size.
+const REFLECTION_DIVISOR: u32 = 2;
+
+/// A reflection keeps this much below its water level, so shores meet their mirror image without a gap.
+const CLIP_BIAS: f32 = 1.0;
 
 /// Path and data of a texture file by the name a material refers to.
 pub type FindTexture<'a> = &'a dyn Fn( &str ) -> Option<(String, Vec<u8>)>;
@@ -137,6 +152,17 @@ impl RenderMode
     }
 }
 
+/// Hour, 0 to 24, and weather of an outdoor level; see [`weather::at`].
+#[ derive( Clone, Copy, PartialEq ) ]
+struct TimeOfDay
+{
+    hour:    f32,
+    weather: Weather,
+
+    /// The street lights burn at night only, as the world script switches them; see [`ModelViewer::with_street_lights`].
+    street_lights: bool,
+}
+
 /// Distance fog of the viewer; the game sets its own from scripts and the time of day.
 #[ derive( Clone, Copy, PartialEq ) ]
 struct Fog
@@ -168,12 +194,14 @@ struct RenderOptions
     /// Mirror the scene in the water; without, it shows the background, and the frame is drawn once.
     reflections: bool,
 
+    /// Let the hour pick the sky, light and fog of an outdoor level; see [`TimeOfDay`].
+    time_of_day: bool,
 }
 
 impl RenderOptions
 {
-    /// A single object; scenes turn lightmaps on, see [`ModelViewer::with_lightmaps`].
-    const DEFAULT: Self = Self { no_cull: true, lightmaps: false, fog: false };
+    /// A single object; scenes turn lightmaps and occlusion on, see [`ModelViewer::with_lightmaps`].
+    const DEFAULT: Self = Self { no_cull: true, lightmaps: false, fog: false, occlusion: false, reflections: true, time_of_day: false };
 }
 
 /// Pipeline a frame is drawn with.
@@ -510,6 +538,13 @@ struct PathView
     links: bool,
 }
 
+/// The sky cube and the faces it reads.
+struct GpuSky
+{
+    pipeline: wgpu::RenderPipeline,
+    group:    wgpu::BindGroup,
+}
+
 struct GpuPaths
 {
     pipeline: wgpu::RenderPipeline,
@@ -671,6 +706,10 @@ struct Look<'a>
     two_phase: bool,
     clear:     wgpu::Color,
 
+    /// The sky goes behind the frame, as it does in the textured modes.
+    sky: bool,
+}
+
 /// One camera's pass over the frame.
 #[ derive( Clone, Copy ) ]
 struct Eye<'a>
@@ -708,6 +747,8 @@ struct Gpu
     target:      Option<Target>,
     texture_id:  Option<TextureId>,
 
+    /// The game's sky behind the frame, see [`Gpu::set_sky`].
+    sky: Option<GpuSky>,
 }
 
 pub struct ModelViewer
@@ -749,10 +790,23 @@ pub struct ModelViewer
     /// Lights whose lightmaps are left out, by actor id; a click on a marker switches one.
     switched_off: HashSet<u32>,
 
+    /// The street lights the world script switches with the hour, by actor id.
+    street_lights: HashSet<u32>,
+
     /// Lighting of a scene without sun, in place of it; see [`ModelViewer::with_ambient`].
     ambient: Option<[f32; 3]>,
 
-    fog: Fog,
+    /// A whole level; only it offers the fog, a single object has nothing far to hide.
+    level: bool,
+
+    /// Holds the cursor while a level is looked around.
+    capture: CursorCapture,
+
+    fog:        Fog,
+    frame_time: FrameTime,
+
+    /// The hour and weather of an outdoor level with the game's sky; they pick its sky, light and fog.
+    time: Option<TimeOfDay>,
 }
 
 impl ModelViewer
@@ -772,7 +826,7 @@ impl ModelViewer
         let unsupported = culling::unsupported( &state.adapter, &state.device );
         let stats       = Stats { kind: model.kind, surfaces: model.surfaces, vertices: model.vertices.len(), triangles: model.triangle_count() };
 
-        Self { gpu, stats, home: camera.clone(), camera, mode: RenderMode::Shaded, options: RenderOptions::DEFAULT, defaults: RenderOptions::DEFAULT, light: Light::DEFAULT, missing, dirty: true, hint_until: None, lights: Vec::new(), show_lights: true, paths: PathView { cells: false, links: false }, switched_off: HashSet::new(), ambient: None, fog: Fog::DEFAULT }
+        Self { gpu, blur, player, stats, home: camera.clone(), camera, mode: RenderMode::Shaded, options: RenderOptions::DEFAULT, defaults: RenderOptions::DEFAULT, light: Light::DEFAULT, missing, dirty: true, hint_until: None, lights: Vec::new(), show_lights: true, paths: PathView { cells: false, links: false }, switched_off: HashSet::new(), street_lights: HashSet::new(), ambient: None, level: false, capture: CursorCapture::default(), fog: Fog::DEFAULT, frame_time: FrameTime::default(), time: None, unsupported }
     }
 
     /// Light markers, and the lights' colors for their lightmaps.
@@ -819,6 +873,31 @@ impl ModelViewer
         self
     }
 
+    /// The game's sky over an outdoor level, at [`START_HOUR`] on a cloudy day.
+    pub fn with_sky( mut self, images: Option<&SkyImages> ) -> Self
+    {
+        if let Some( images ) = images
+        {
+            self.gpu.set_sky( images );
+            self.time = Some( TimeOfDay { hour: START_HOUR, weather: Weather::Cloudy, street_lights: true } );
+            self.options.time_of_day = true;
+            self.defaults = self.options;
+            self.on_time_change();
+        }
+
+        self
+    }
+
+    /// `street` are the lights the world script switches with the hour; `off` start switched off, as the game has them.
+    pub fn with_street_lights( mut self, street: HashSet<u32>, off: &HashSet<u32> ) -> Self
+    {
+        self.street_lights = street;
+        self.switched_off.extend( off );
+        self.dirty = true;
+
+        self
+    }
+
     pub fn with_paths( mut self, lines: Option<&PathLines> ) -> Self
     {
         if let Some( lines ) = lines
@@ -857,7 +936,27 @@ impl ModelViewer
                     self.dirty |= ui.checkbox( &mut self.paths.cells, t!( "model.path_cells" ) ).changed();
                     self.dirty |= ui.checkbox( &mut self.paths.links, t!( "model.path_links" ) ).changed();
                 }
-                self.dirty |= ui.checkbox( &mut self.options.fog, t!( "model.fog" ) ).changed();
+                if self.gpu.water.as_ref().is_some_and( |water| !water.levels.is_empty() )
+                {
+                    self.dirty |= ui.checkbox( &mut self.options.reflections, t!( "model.reflections" ) ).changed();
+                }
+                let mut changed = false;
+                if let Some( time ) = &mut self.time
+                {
+                    changed |= ui.checkbox( &mut self.options.time_of_day, t!( "model.time_of_day" ) ).changed();
+                    if self.options.time_of_day
+                    {
+                        changed |= time_settings( ui, palette, time );
+                    }
+                }
+                if changed
+                {
+                    self.on_time_change();
+                }
+                if self.level
+                {
+                    self.dirty |= ui.checkbox( &mut self.options.fog, t!( "model.fog" ) ).changed();
+                }
                 if self.options.fog
                 {
                     self.dirty |= fog_settings( ui, palette, &mut self.fog );
@@ -925,7 +1024,16 @@ impl ModelViewer
         }
         if self.show_lights
         {
-            paint_lights( view, palette, rect, &self.camera, &self.lights, &self.switched_off, light );
+            paint_lights( view, palette, rect, &self.camera, &self.lights, &self.lights_out(), light );
+        }
+        if let Some( blurred ) = self.blur.id()
+        {
+            sections.set_backdrop( blurred, rect );
+        }
+        if let Some( seconds ) = self.frame_time.seconds.filter( |_| shown.show_fps )
+        {
+            let text = t!( "model.frame_time", fps = format!( "{:.0}", 1.0 / seconds ), ms = format!( "{:.1}", seconds * 1000.0 ) );
+            sections.top_text( plate, &text );
         }
 
         // Read even when hidden, so the readback keeps going.
@@ -987,8 +1095,34 @@ impl ModelViewer
             }
         }
 
-        let corner = sections.corner( PIVOT_PLATE );
-        paint_pivot( sections.view.painter(), corner.center(), &self.camera );
+        if shown.show_orientation
+        {
+            let corner = sections.corner( PIVOT_PLATE );
+            paint_pivot( sections.view.painter(), corner.center(), &self.camera );
+        }
+    }
+
+    /// The fog follows the hour, as the game's weather script sets it; without the time of day it is the viewer's own.
+    fn on_time_change( &mut self )
+    {
+        self.dirty = true;
+        let Some( time ) = self.time.filter( |_| self.options.time_of_day ) else
+        {
+            self.fog = Fog::DEFAULT;
+            return;
+        };
+        let sky = weather::at( time.hour, time.weather );
+        let [ red, green, blue ] = sky.fog.map( |channel| to_byte( channel * 255.0 ) );
+        self.fog = Fog { start: weather::FOG_START, end: weather::FOG_END, color: Color32::from_rgb( red, green, blue ) };
+    }
+
+    /// Lights left out of the frame: those switched off by hand, and the street lights by day while they follow the hour.
+    fn lights_out( &self ) -> HashSet<u32>
+    {
+        let by_day = self.time.is_some_and( |time| self.options.time_of_day && time.street_lights && !weather::street_lights_on( time.hour ) );
+        let out    = if by_day { self.switched_off.union( &self.street_lights ).copied().collect() } else { self.switched_off.clone() };
+
+        out
     }
 
     fn on_switch_light( &mut self, id: u32 )
@@ -1041,8 +1175,17 @@ impl ModelViewer
         }
         if std::mem::take( &mut self.dirty )
         {
-            let fog      = self.options.fog.then_some( self.fog );
-            let uniforms = frame_uniforms( &self.camera, self.mode, self.light, self.options, self.ambient, fog, size );
+            let fog          = self.options.fog.then_some( self.fog );
+            let mut uniforms = frame_uniforms( &self.camera, self.mode, self.light, self.options, self.ambient, fog, size );
+
+            if let Some( time ) = self.time.filter( |_| self.options.time_of_day )
+            {
+                let sky = weather::at( time.hour, time.weather );
+                uniforms[ 28..31 ].copy_from_slice( &sky.ambient );
+                uniforms[ 52..55 ].copy_from_slice( &sky.sun );
+                uniforms[ 55 ] = 1.0;
+                uniforms[ 56..60 ].copy_from_slice( &[ sky.from, sky.to, sky.blend, 1.0 ] );
+            }
             let pass = match ( self.mode, self.options.no_cull )
             {
                 ( RenderMode::Wireframe, _ ) => Pass::Wireframe,
@@ -1050,8 +1193,11 @@ impl ModelViewer
                 ( _, false ) => Pass::FrontFaces,
             };
             let textured = matches!( self.mode, RenderMode::Material | RenderMode::Shaded );
-            let lights   = ( self.options.lightmaps && textured ).then_some( &self.switched_off );
-            self.gpu.draw( &uniforms, pass, self.paths, lights, background );
+            let out      = self.lights_out();
+            let lights   = ( self.options.lightmaps && textured ).then_some( &out );
+            self.gpu.draw( &uniforms, pass, self.paths, lights, self.options.occlusion, background, textured, self.options.reflections );
+            self.blur.run();
+            self.frame_time.on_frame();
         }
 
         self.gpu.texture_id
@@ -1243,6 +1389,45 @@ fn angle( ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, ra
     ui.end_row();
 
     result.is_some()
+}
+
+/// Hour slider and weather choice; returns whether either changed.
+fn time_settings( ui: &mut egui::Ui, palette: &Palette, time: &mut TimeOfDay ) -> bool
+{
+    let before = *time;
+
+    egui::Grid::new( "time" ).show(
+        ui,
+        |ui|
+        {
+            ui.label( t!( "model.hour" ) );
+            if let Some( hour ) = widgets::slider( ui, palette, time.hour, ( 0.0, 24.0 ) )
+            {
+                time.hour = ( hour * 4.0 ).round() / 4.0;
+            }
+            let minutes = from_f32( ( time.hour * 60.0 ).round() );
+            ui.label( format!( "{:02}:{:02}", ( minutes / 60 ) % 24, minutes % 60 ) );
+            ui.end_row();
+        }
+    );
+    ui.horizontal(
+        |ui|
+        {
+            for weather in Weather::ALL
+            {
+                ui.selectable_value( &mut time.weather, weather, t!( weather.key() ) );
+            }
+        }
+    );
+    ui.checkbox( &mut time.street_lights, t!( "model.street_lights" ) );
+
+    *time != before
+}
+
+/// Rounded and held to 0..255; Rust has no `TryFrom<f32>` for integers.
+fn to_byte( value: f32 ) -> u8
+{
+    value.round().clamp( 0.0, 255.0 ) as u8
 }
 
 fn frame_uniforms( camera: &Camera, mode: RenderMode, light: Light, options: RenderOptions, ambient: Option<[f32; 3]>, fog: Option<Fog>, size: [u32; 2] ) -> FrameUniforms
@@ -1515,6 +1700,7 @@ impl Gpu
             paths:      None,
             target:     None,
             texture_id: None,
+            sky:        None,
         };
 
         gpu
@@ -1579,6 +1765,116 @@ impl Gpu
         self.paths = Some( paths );
     }
 
+    /// The game's sky from `images`: a cube around the eye that the frame draws over.
+    fn set_sky( &mut self, images: &SkyImages )
+    {
+        let device = &self.state.device;
+        let shader_source = wgpu::ShaderModuleDescriptor
+        {
+            label:  Some( "sky" ),
+            source: wgpu::ShaderSource::Wgsl( include_str!( "sky.wgsl" ).into() ),
+        };
+        let shader = device.create_shader_module( shader_source );
+
+        let frame_entries = [ uniform_entry( 0, wgpu::ShaderStages::VERTEX_FRAGMENT ) ];
+        let frame_layout  = device.create_bind_group_layout( &wgpu::BindGroupLayoutDescriptor { label: Some( "sky frame" ), entries: &frame_entries } );
+        let face_entries =
+        [
+            wgpu::BindGroupLayoutEntry
+            {
+                binding:    0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty:         wgpu::BindingType::Texture
+                {
+                    sample_type:    wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled:   false,
+                },
+                count:      None,
+            },
+            wgpu::BindGroupLayoutEntry
+            {
+                binding:    1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty:         wgpu::BindingType::Sampler( wgpu::SamplerBindingType::Filtering ),
+                count:      None,
+            },
+        ];
+        let face_layout = device.create_bind_group_layout( &wgpu::BindGroupLayoutDescriptor { label: Some( "sky faces" ), entries: &face_entries } );
+        let layout_descriptor = wgpu::PipelineLayoutDescriptor
+        {
+            label:              Some( "sky" ),
+            bind_group_layouts: &[ Some( &frame_layout ), Some( &face_layout ) ],
+            immediate_size:     0,
+        };
+        let layout = device.create_pipeline_layout( &layout_descriptor );
+
+        let targets = [ Some( wgpu::ColorTargetState { format: COLOR_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL } ) ];
+        let vertex = wgpu::VertexState
+        {
+            module:              &shader,
+            entry_point:         Some( "vs_sky" ),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers:             &[],
+        };
+        let fragment = wgpu::FragmentState
+        {
+            module:              &shader,
+            entry_point:         Some( "fs_sky" ),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets:             &targets,
+        };
+        // At the far depth and leaving it as cleared: everything after draws over the sky.
+        let depth_stencil = wgpu::DepthStencilState
+        {
+            format:              DEPTH_FORMAT,
+            depth_write_enabled: Some( false ),
+            depth_compare:       Some( wgpu::CompareFunction::Always ),
+            stencil:             wgpu::StencilState::default(),
+            bias:                wgpu::DepthBiasState::default(),
+        };
+        let descriptor = wgpu::RenderPipelineDescriptor
+        {
+            label:          Some( "sky" ),
+            layout:         Some( &layout ),
+            vertex,
+            primitive:      wgpu::PrimitiveState::default(),
+            depth_stencil:  Some( depth_stencil ),
+            multisample:    wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
+            fragment:       Some( fragment ),
+            multiview_mask: None,
+            cache:          None,
+        };
+        let pipeline = device.create_render_pipeline( &descriptor );
+
+        let texture_descriptor = wgpu::TextureDescriptor
+        {
+            label:           Some( "sky faces" ),
+            size:            wgpu::Extent3d { width: images.side, height: images.side, depth_or_array_layers: images.layers },
+            mip_level_count: 1,
+            sample_count:    1,
+            dimension:       wgpu::TextureDimension::D2,
+            format:          wgpu::TextureFormat::Rgba8Unorm,
+            usage:           wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats:    &[],
+        };
+        let texture     = device.create_texture( &texture_descriptor );
+        let destination = wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All };
+        let data_layout = wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some( images.side * 4 ), rows_per_image: Some( images.side ) };
+        self.state.queue.write_texture( destination, &images.rgba, data_layout, texture_descriptor.size );
+
+        let view    = texture.create_view( &wgpu::TextureViewDescriptor { dimension: Some( wgpu::TextureViewDimension::D2Array ), ..Default::default() } );
+        let sampler = device.create_sampler( &wgpu::SamplerDescriptor { label: Some( "sky" ), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() } );
+        let entries =
+        [
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView( &view ) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler( &sampler ) },
+        ];
+        let group = device.create_bind_group( &wgpu::BindGroupDescriptor { label: Some( "sky faces" ), layout: &face_layout, entries: &entries } );
+
+        self.sky = Some( GpuSky { pipeline, group } );
+    }
+
     fn resize( &mut self, size: [u32; 2] )
     {
         let device = &self.state.device;
@@ -1598,6 +1894,102 @@ impl Gpu
             None => self.texture_id = Some( renderer.register_native_texture( device, &target.resolve, wgpu::FilterMode::Linear ) ),
         }
         self.target = Some( target );
+    }
+
+    /// `lights` turns the lightmap overlays on, all but the switched off ones.
+    /// `occlusion` draws last frame's visible clusters first, then only what their depth leaves visible.
+    /// `mirror`, for the textured modes, draws the see-through water, over the reflection of its level if `reflections`.
+    fn draw( &self, uniforms: &FrameUniforms, pass: Pass, paths: PathView, lights: Option<&HashSet<u32>>, occlusion: bool, background: Color32, mirror: bool, reflections: bool )
+    {
+        let Some( target ) = &self.target else { return };
+        let queue     = &self.state.queue;
+        let wireframe = matches!( pass, Pass::Wireframe );
+        let two_phase = occlusion && !wireframe;
+        let mut encoder = self.state.device.create_command_encoder( &wgpu::CommandEncoderDescriptor { label: Some( "model" ) } );
+
+        let [ r, g, b, a ] = background.to_normalized_gamma_f32();
+        let clear = wgpu::Color { r: f64::from( r ), g: f64::from( g ), b: f64::from( b ), a: f64::from( a ) };
+
+        let mut uniforms = *uniforms;
+        uniforms[ 48..51 ].copy_from_slice( &[ r, g, b ] );
+
+        let water  = self.water.as_ref().filter( |_| mirror && !wireframe ).and_then( |water| Some( ( water, water.reflection.as_ref()? ) ) );
+        let sky    = mirror && !wireframe && uniforms[ 59 ] > 0.5;
+        let look   = Look { pass, lights: lights.filter( |_| !wireframe ), two_phase, clear, sky };
+
+        if let Some( ( water, reflection ) ) = water
+            && reflections
+            && let Some( level ) = water.level( [ uniforms[ 24 ], uniforms[ 25 ], uniforms[ 26 ] ] )
+        {
+            uniforms[ 44 ] = level;
+            uniforms[ 45 ] = 1.0;
+            let mirrored = reflected( &uniforms, level );
+            queue.write_buffer( &water.frame, 0, bytemuck::cast_slice( &mirrored ) );
+            water.culling.prepare( queue, &mirrored[ ..16 ], &mirrored[ 40..44 ], two_phase );
+            let eye = Eye { frame: &water.frame_group, culling: &water.culling, culled: &water.mirrored, water: WaterPass::Hidden };
+            self.draw_eye( &mut encoder, &reflection.target, eye, look, None );
+        }
+
+        queue.write_buffer( &self.frame, 0, bytemuck::cast_slice( &uniforms ) );
+        self.camera.prepare( queue, &uniforms[ ..16 ], &uniforms[ 40..44 ], two_phase );
+        let surface = water.map_or( WaterPass::Plain, |( water, reflection )| WaterPass::Mirror( &water.surface, &reflection.group ) );
+        let eye     = Eye { frame: &self.frame_group, culling: &self.camera, culled: &self.fill_culled, water: surface };
+        self.draw_eye( &mut encoder, target, eye, look, Some( paths ) );
+
+        let read = self.camera.read_back( &mut encoder );
+
+        queue.submit( [ encoder.finish() ] );
+        if read
+        {
+            self.camera.map();
+        }
+    }
+
+    /// One camera's frame into `target`: its culling, the parts and the overlays, and the `paths` lines if any.
+    fn draw_eye( &self, encoder: &mut wgpu::CommandEncoder, target: &Target, eye: Eye, look: Look, paths: Option<PathView> )
+    {
+        if look.two_phase
+        {
+            self.culling.early( eye.culling, encoder );
+            let mut render_pass = begin_pass( encoder, target, Some( look.clear ), false );
+            self.draw_sky( &mut render_pass, eye, look );
+            let mut bound = self.draw_plain( &mut render_pass, eye, look.pass );
+            self.draw_water( &mut render_pass, eye, &mut bound );
+        }
+        self.culling.late( eye.culling, encoder, look.two_phase );
+
+        let mut render_pass = begin_pass( encoder, target, ( !look.two_phase ).then_some( look.clear ), true );
+        if !look.two_phase
+        {
+            self.draw_sky( &mut render_pass, eye, look );
+        }
+        let mut bound = self.draw_plain( &mut render_pass, eye, look.pass );
+
+        if let Some( switched_off ) = look.lights
+        {
+            render_pass.set_pipeline( &self.overlay );
+            for part in &self.parts
+            {
+                let Some( light ) = part.light else { continue };
+                if !switched_off.contains( &light )
+                {
+                    self.draw_part( &mut render_pass, eye, part, false, &mut bound );
+                }
+            }
+        }
+        self.draw_water( &mut render_pass, eye, &mut bound );
+
+        let Some( ( gpu_paths, paths ) ) = self.paths.as_ref().zip( paths ) else { return };
+        render_pass.set_pipeline( &gpu_paths.pipeline );
+        render_pass.set_vertex_buffer( 0, gpu_paths.vertices.slice( .. ) );
+        render_pass.set_index_buffer( gpu_paths.indices.slice( .. ), wgpu::IndexFormat::Uint32 );
+        for ( range, shown ) in [ ( gpu_paths.cells.clone(), paths.cells ), ( gpu_paths.links.clone(), paths.links ) ]
+        {
+            if shown && !range.is_empty()
+            {
+                render_pass.draw_indexed( range, 0, 0..1 );
+            }
+        }
     }
 
     /// Parts without lightmaps, as far as the culling left them, and the water if `eye` draws it as them; returns the bound vertex chunk.
@@ -1623,6 +2015,16 @@ impl Gpu
         }
 
         bound
+    }
+
+    /// The sky behind everything else, in a pass that starts anew.
+    fn draw_sky( &self, render_pass: &mut wgpu::RenderPass, eye: Eye, look: Look )
+    {
+        let Some( sky ) = self.sky.as_ref().filter( |_| look.sky ) else { return };
+        render_pass.set_pipeline( &sky.pipeline );
+        render_pass.set_bind_group( 0, eye.frame, &[] );
+        render_pass.set_bind_group( 1, &sky.group, &[] );
+        render_pass.draw( 0..SKY_VERTICES, 0..1 );
     }
 
     /// The see-through water over what is drawn so far, when `eye` mirrors it.

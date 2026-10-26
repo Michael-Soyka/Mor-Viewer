@@ -101,6 +101,12 @@ model:
   no_cull: No face culling
   occlusion: Hide occluded geometry
   reflections: Reflections
+  time_of_day: Time of day
+  hour: Hour
+  street_lights: Street lights follow the time of day
+  weather_clear: Clear
+  weather_cloudy: Cloudy
+  weather_rain: Rain
   visible_clusters: "Visible clusters: %{visible} / %{total}"
   drawn_triangles: "Triangles drawn: %{count}"
   frame_time: "%{fps} FPS · %{ms} ms"
