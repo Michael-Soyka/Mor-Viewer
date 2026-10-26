@@ -73,10 +73,10 @@ fn device_descriptor( adapter: &wgpu::Adapter ) -> wgpu::DeviceDescriptor<'stati
     descriptor
 }
 
-/// The title bar icon, rasterized for the window and the taskbar.
+/// The icon on its tile, rasterized for the window and the taskbar.
 fn app_icon() -> Option<eframe::egui::IconData>
 {
-    let image = egui_extras::image::load_svg_bytes( include_bytes!( "../assets/icons/app.svg" ), &Default::default() ).ok()?;
+    let image = egui_extras::image::load_svg_bytes( include_bytes!( "../assets/icons/app-tile.svg" ), &Default::default() ).ok()?;
     let rgba  = image.pixels.iter().flat_map( |pixel| pixel.to_srgba_unmultiplied() ).collect();
 
     let [ width, height ] = image.size.map( |side| u32::try_from( side ).unwrap_or( 0 ) );
