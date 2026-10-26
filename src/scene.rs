@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{ HashMap, HashSet };
 use std::path::PathBuf;
 use std::sync::atomic::{ AtomicUsize, Ordering };
 
@@ -49,6 +49,7 @@ pub struct LoadedScene
 
     /// Game position and direction of the start point.
     pub start: Option<([f32; 3], [f32; 3])>,
+
 }
 
 /// Every mesh the scene's actors and terrain name, merged into one model.
@@ -82,11 +83,11 @@ pub fn load( archives: &[PathBuf], file: &str, progress: &Progress ) -> Result<L
 
     let mut sources = Vec::new();
 
-    for mesh in &meshes
+    for ( index, mesh ) in ( 0.. ).zip( &meshes )
     {
         if let Ok( ( _, list ) ) = model::sources( mesh )
         {
-            sources.extend( list );
+            sources.extend( list.into_iter().map( |source| source.in_mesh( index ) ) );
         }
     }
     model::sort_by_material( &mut sources );

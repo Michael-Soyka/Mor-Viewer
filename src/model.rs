@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{ HashMap, HashSet };
 use std::ops::Range;
 
 use mormesh::layout::interior::InteriorSurface;
@@ -11,12 +11,31 @@ const WATER_COLOR: [f32; 4] = [ 0.25, 0.42, 0.55, 0.0 ];
 /// Position, normal, uv, lightmap uv.
 pub type Vertex = [f32; 10];
 
+/// Bounding box of triangles of one mesh in one grid cell; culled as a whole.
+pub struct Cluster
+{
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+/// Triangles and edges of a part that lie in one cluster.
+pub struct Draw
+{
+    pub cluster:   u32,
+    pub triangles: Range<u32>,
+    pub edges:     Range<u32>,
+}
+
 /// One surface of the merged buffers.
 pub struct Part
 {
     pub triangles: Range<u32>,
     pub edges:     Range<u32>,
-    pub texture:   Option<String>,
+
+    /// The ranges above cut by cluster, in order.
+    pub draws: Vec<Draw>,
+
+    pub texture: Option<String>,
 
     /// Base color; alpha is 1 when the texture is alpha-tested.
     pub color: [f32; 4],
@@ -24,6 +43,10 @@ pub struct Part
     /// Lightmap overlay: index into [`Model::lightmaps`] and the light it is baked for.
     /// Drawn over the plain parts, adding that light's share.
     pub lightmap: Option<( usize, u32 )>,
+
+    /// Height of the water level the part lies on, if it is water; parts of different levels stay apart.
+    pub water: Option<f32>,
+
 }
 
 /// 8-bit luminance with its mip levels: light of nearby sources, added to the lighting.
@@ -41,6 +64,7 @@ pub struct Model
     pub edges:     Vec<u32>,
     pub parts:     Vec<Part>,
     pub lightmaps: Vec<LightmapImage>,
+    pub clusters:  Vec<Cluster>,
     pub center:    [f32; 3],
     pub radius:    f32,
 
@@ -49,6 +73,7 @@ pub struct Model
 
     /// Translation key of the mesh layout.
     pub kind: &'static str,
+
 }
 
 /// Surface geometry borrowed from a parsed mesh.
@@ -63,6 +88,21 @@ pub struct Source<'a>
 
     /// Lightmap pages per light, by the light actor's id.
     lightmaps: Vec<( u32, &'a [LightmapPage] )>,
+
+    /// Mesh the surface comes from: clusters do not mix meshes.
+    mesh: u32,
+
+    /// A water surface.
+    water: bool,
+
+impl Source<'_>
+{
+    pub fn in_mesh( mut self, mesh: u32 ) -> Self
+    {
+        self.mesh = mesh;
+
+        self
+    }
 }
 
 /// Buffers of [`Model::merge`] as they fill up.
@@ -74,10 +114,45 @@ struct Builder
     edges:     Vec<u32>,
     parts:     Vec<Part>,
     lightmaps: Vec<LightmapImage>,
+    clusters:  Vec<Cluster>,
+
+    /// Cluster ids by mesh and grid cell.
+    cells: HashMap<(u32, [u32; 3]), u32>,
+
+    /// Cluster of each triangle and edge, in buffer order.
+    triangle_clusters: Vec<u32>,
+    edge_clusters:     Vec<u32>,
 }
 
 impl Builder
 {
+    /// Cluster of the triangle's centre, grown over its corners.
+    fn cluster( &mut self, mesh: u32, corners: [u32; 3] ) -> u32
+    {
+        let points = corners.map( |index| self.vertices.get( to_usize( index ) ).map_or( [ 0.0; 3 ], |vertex| [ vertex[ 0 ], vertex[ 1 ], vertex[ 2 ] ] ) );
+        // Adding zero turns -0 into 0, so both land in one cell.
+        let cell   = [ 0, 1, 2 ].map( |axis| ( ( points[ 0 ][ axis ] + points[ 1 ][ axis ] + points[ 2 ][ axis ] ) / ( 3.0 * CLUSTER_CELL ) ).floor() + 0.0 ).map( f32::to_bits );
+
+        let next = to_u32( self.clusters.len() );
+        let id   = *self.cells.entry( ( mesh, cell ) ).or_insert( next );
+        if id == next
+        {
+            self.clusters.push( Cluster { min: [ f32::MAX; 3 ], max: [ f32::MIN; 3 ] } );
+        }
+        let Some( cluster ) = self.clusters.get_mut( to_usize( id ) ) else { return id };
+
+        for point in points
+        {
+            for axis in 0..3
+            {
+                cluster.min[ axis ] = cluster.min[ axis ].min( point[ axis ] );
+                cluster.max[ axis ] = cluster.max[ axis ].max( point[ axis ] );
+            }
+        }
+
+        id
+    }
+
     /// Lit triangles go in a part per lightmap page, with the page's own triangulation; the rest as stored.
     fn add( &mut self, source: &Source )
     {
@@ -125,12 +200,15 @@ impl Builder
         for triangle in triangles
         {
             let [ a, b, c ] = triangle.map( u32::from );
+            let cluster     = self.cluster( source.mesh, [ base + a, base + b, base + c ] );
             self.triangles.extend( [ base + a, base + b, base + c ] );
+            self.triangle_clusters.push( cluster );
             for ( from, to ) in [ ( a, b ), ( b, c ), ( c, a ) ]
             {
                 if seen.insert( ( from.min( to ), from.max( to ) ) )
                 {
                     self.edges.extend( [ base + from, base + to ] );
+                    self.edge_clusters.push( cluster );
                 }
             }
         }
@@ -138,6 +216,8 @@ impl Builder
         {
             return;
         }
+
+        let water = source.water.then( || mid_height( source.positions ) );
 
         let same_material = lightmap.is_none() && self.parts.last().is_some_and(
             |last: &Part| last.lightmap.is_none() && last.color == source.color && last.texture.as_deref().map( str::to_lowercase ) == source.texture.map( str::to_lowercase )
@@ -155,6 +235,7 @@ impl Builder
                 {
                     triangles: triangle_start..to_u32( self.triangles.len() ),
                     edges:     edge_start..to_u32( self.edges.len() ),
+                    draws:     Vec::new(),
                     texture:   source.texture.map( str::to_owned ),
                     color:     source.color,
                     lightmap,
@@ -163,6 +244,56 @@ impl Builder
             }
         }
     }
+
+    /// Orders each part's triangles and edges by cluster and cuts the part into a draw per cluster.
+    fn split_draws( &mut self )
+    {
+        for part in &mut self.parts
+        {
+            let triangles = sort_by_cluster::<3>( &mut self.triangles, &self.triangle_clusters, &part.triangles );
+            let mut edges = sort_by_cluster::<2>( &mut self.edges, &self.edge_clusters, &part.edges ).into_iter().peekable();
+
+            // An edge takes the cluster of a triangle it belongs to, so both lists run through the clusters in the same order.
+            for ( cluster, triangles ) in triangles
+            {
+                let edges = edges.next_if( |( edge_cluster, _ )| *edge_cluster == cluster ).map_or( 0..0, |( _, run )| run );
+                part.draws.push( Draw { cluster, triangles, edges } );
+            }
+        }
+    }
+}
+
+/// Stable-sorts the primitives of `N` indices in `range` by cluster; runs of one cluster with their index ranges.
+fn sort_by_cluster<const N: usize>( indices: &mut [u32], clusters: &[u32], range: &Range<u32> ) -> Vec<(u32, Range<u32>)>
+{
+    let Some( slice ) = indices.get_mut( to_usize( range.start )..to_usize( range.end ) ) else { return Vec::new() };
+    let first = to_usize( range.start ) / N;
+
+    let mut primitives: Vec<(u32, [u32; N])> = slice
+        .chunks_exact( N )
+        .zip( clusters.get( first.. ).unwrap_or_default() )
+        .map( |( chunk, &cluster )| ( cluster, <[u32; N]>::try_from( chunk ).unwrap_or( [ 0; N ] ) ) )
+        .collect();
+    primitives.sort_by_key( |&( cluster, _ )| cluster );
+
+    for ( chunk, ( _, primitive ) ) in slice.chunks_exact_mut( N ).zip( &primitives )
+    {
+        chunk.copy_from_slice( primitive );
+    }
+
+    let step     = to_u32( N );
+    let mut runs = Vec::<(u32, Range<u32>)>::new();
+
+    for ( offset, &( cluster, _ ) ) in ( range.start.. ).step_by( N ).zip( &primitives )
+    {
+        match runs.last_mut()
+        {
+            Some( ( last, run ) ) if *last == cluster => run.end = offset + step,
+            _ => runs.push( ( cluster, offset..offset + step ) ),
+        }
+    }
+
+    runs
 }
 
 /// The first of the page's two images; what the second holds is not established.
@@ -204,8 +335,9 @@ impl Model
             }
             builder.add( source );
         }
+        builder.split_draws();
 
-        let Builder { vertices, triangles, edges, parts, lightmaps } = builder;
+        let Builder { vertices, triangles, edges, parts, lightmaps, clusters, .. } = builder;
         let center = [ 0, 1, 2 ].map( |axis| ( min[ axis ] + max[ axis ] ) / 2.0 );
         let radius = vertices
             .iter()
@@ -331,6 +463,14 @@ fn interior_source( surface: &InteriorSurface ) -> Source<'_>
     source
 }
 
+/// Middle of the points' heights: the level of a water surface, flat or nearly so.
+fn mid_height( positions: &[[f32; 3]] ) -> f32
+{
+    let ( low, high ) = positions.iter().fold( ( f32::MAX, f32::MIN ), |( low, high ), position| ( low.min( position[ 1 ] ), high.max( position[ 1 ] ) ) );
+
+    if low > high { 0.0 } else { ( low + high ) / 2.0 }
+}
+
 /// Area-weighted vertex normals for surfaces stored without them.
 fn smooth_normals( positions: &[[f32; 3]], triangles: &[[u16; 3]] ) -> Vec<[f32; 3]>
 {
@@ -374,4 +514,9 @@ fn smooth_normals( positions: &[[f32; 3]], triangles: &[[u16; 3]] ) -> Vec<[f32;
 pub fn to_u32( value: usize ) -> u32
 {
     u32::try_from( value ).unwrap_or( u32::MAX )
+}
+
+pub fn to_usize( value: u32 ) -> usize
+{
+    usize::try_from( value ).unwrap_or( usize::MAX )
 }

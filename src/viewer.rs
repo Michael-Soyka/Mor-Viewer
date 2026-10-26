@@ -12,6 +12,7 @@ use crate::map_viewer::MapViewer;
 use crate::model_viewer::ModelViewer;
 use crate::preview::Preview;
 use crate::scene_viewer::SceneViewer;
+use crate::settings::ViewerSettings;
 use crate::texture_viewer::TextureViewer;
 use crate::theme::{ self, Palette };
 use crate::widgets::{ self, BAR_HEIGHT };
@@ -74,7 +75,7 @@ impl Viewer
     }
 
     /// Returns an error to show in the status bar.
-    pub fn show( &mut self, ui: &mut egui::Ui, palette: &Palette, checker: &TextureHandle, data: &[u8] ) -> Option<String>
+    pub fn show( &mut self, ui: &mut egui::Ui, palette: &Palette, checker: &TextureHandle, data: &[u8], view: &ViewerSettings ) -> Option<String>
     {
         match self
         {
@@ -154,6 +155,7 @@ pub struct Sections
     plates: Option<[ShapeIdx; 4]>,
 
     plate_fill: Color32,
+
 }
 
 impl Sections
@@ -168,6 +170,7 @@ impl Sections
         let inner  = rect.shrink( PLATE_INSET + PLATE_PADDING );
         let top    = Rect::from_min_size( inner.min, Vec2::new( inner.width(), PLATE_ROW ) );
         let bottom = Rect::from_min_max( Pos2::new( inner.min.x, inner.max.y - PLATE_ROW ), inner.max );
+        let above  = bottom.translate( Vec2::new( 0.0, -( PLATE_ROW + ( 2.0 * PLATE_PADDING ) + PLATE_GAP ) ) );
 
         let plate = |ui: &mut egui::Ui, row: Rect, layout: Layout|
         {
@@ -278,6 +281,7 @@ impl Drop for Sections
         let parts = [ &self.action_left, &self.action_right, &self.footer_left, &self.footer_right ];
         for ( part, slot ) in parts.into_iter().zip( slots )
         {
+            let Some( part ) = part else { continue };
             let content = part.min_rect();
             if content.width() <= 0.0
             {

@@ -26,6 +26,9 @@ mod widgets;
 mod xml_viewer;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use eframe::egui_wgpu::{ self, wgpu };
 
 rust_i18n::i18n!( "locales", fallback = "en" );
 

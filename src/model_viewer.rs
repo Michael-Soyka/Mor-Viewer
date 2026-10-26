@@ -1,4 +1,5 @@
 use std::collections::{ HashMap, HashSet };
+use std::time::Instant;
 
 use eframe::egui::{ self, Color32, Key, Pos2, Rect, Sense, Stroke, TextureId, Vec2 };
 use eframe::egui_wgpu::{ RenderState, wgpu };
@@ -7,8 +8,10 @@ use wgpu::util::DeviceExt;
 use rust_i18n::t;
 use crate::i18n;
 use crate::icons;
-use crate::model::{ Model, Vertex };
-use crate::theme::Palette;
+use crate::culling::{ self, CullView, Culling };
+use crate::model::{ Model, Vertex, to_usize };
+use crate::settings::ViewerSettings;
+use crate::theme::{ self, Palette };
 use crate::viewer::Sections;
 use crate::widgets::{ self, to_f32 };
 
@@ -56,6 +59,10 @@ const HINT_FADE:    f64 = 0.5;
 /// Light markers: dot radius and how close the pointer has to be to pick one.
 const LIGHT_MARKER: f32 = 4.0;
 const LIGHT_PICK:   f32 = 7.0;
+
+/// Frame time: frames further apart than this follow a pause; share of each new frame in the average.
+const FRAME_GAP:       f32 = 0.25;
+const FRAME_SMOOTHING: f32 = 0.1;
 
 const PIVOT_PLATE:  f32 = 72.0;
 const PIVOT_LENGTH: f32 = 26.0;
@@ -152,6 +159,10 @@ struct RenderOptions
 
     lightmaps: bool,
     fog:       bool,
+
+    /// Leave out clusters hidden behind others, see [`Culling`].
+    occlusion: bool,
+
 }
 
 impl RenderOptions
@@ -316,7 +327,6 @@ impl Orbit
     {
         let mut changed = false;
 
-        let delta = response.drag_delta();
         if delta != Vec2::ZERO
         {
             if response.dragged_by( egui::PointerButton::Primary )
@@ -379,7 +389,6 @@ impl Fly
     {
         let mut changed = false;
 
-        let delta = response.drag_delta();
         if delta != Vec2::ZERO
         {
             self.yaw -= delta.x * LOOK_SPEED;
@@ -469,6 +478,29 @@ pub struct SceneLight
     pub radius:   f32,
 }
 
+/// Time between drawn frames, smoothed; frames drawn far apart, after the view stood still, are left out.
+#[ derive( Default ) ]
+struct FrameTime
+{
+    last:    Option<Instant>,
+    seconds: Option<f32>,
+}
+
+impl FrameTime
+{
+    fn on_frame( &mut self )
+    {
+        let now = Instant::now();
+
+        if let Some( gap ) = self.last.map( |last| now.duration_since( last ).as_secs_f32() ).filter( |&gap| gap < FRAME_GAP )
+        {
+            let seconds = self.seconds.map_or( gap, |seconds| seconds + ( ( gap - seconds ) * FRAME_SMOOTHING ) );
+            self.seconds = Some( seconds );
+        }
+        self.last = Some( now );
+    }
+}
+
 /// Totals for the footer; the model itself is dropped once uploaded.
 struct Stats
 {
@@ -504,9 +536,65 @@ struct GpuPart
     /// Base color, then the light's color.
     uniform: wgpu::Buffer,
 
-    triangles:  std::ops::Range<u32>,
-    edges:      std::ops::Range<u32>,
+    /// The part's records in [`Culling`], a cluster each, and its place among the parts.
+    records: std::ops::Range<u32>,
+    index:   u32,
+
+    /// Drawn over the reflection of its level, see [`Water`].
+    water: bool,
+
     bind_group: wgpu::BindGroup,
+}
+
+/// Planar reflection of the scene in its water: the frame drawn once more from under the water level,
+/// with the view mirrored in it and everything below it cut away.
+/// One level is mirrored at a time, the one whose water is nearest under the eye; see [`Water::level`].
+struct Water
+{
+    /// The water parts over the reflection.
+    surface: wgpu::RenderPipeline,
+
+/// The reflection's frame and the bind group the water reads it through.
+struct Reflection
+{
+    target: Target,
+    group:  wgpu::BindGroup,
+}
+
+/// How a pass draws the water parts.
+#[ derive( Clone, Copy ) ]
+enum WaterPass<'a>
+{
+    /// As any other part, in the untextured modes.
+    Plain,
+
+    /// Over the reflection: the pipeline and the reflection's bind group.
+    Mirror( &'a wgpu::RenderPipeline, &'a wgpu::BindGroup ),
+
+    /// Left out, from the reflection itself.
+    Hidden,
+}
+
+/// What every camera of a frame draws alike: the pipeline, the lightmap overlays, whether two-phase, the background.
+#[ derive( Clone, Copy ) ]
+struct Look<'a>
+{
+    pass:      Pass,
+    lights:    Option<&'a HashSet<u32>>,
+    two_phase: bool,
+    clear:     wgpu::Color,
+
+/// One camera's pass over the frame.
+#[ derive( Clone, Copy ) ]
+struct Eye<'a>
+{
+    frame:   &'a wgpu::BindGroup,
+    culling: &'a CullView,
+
+    /// Front faces only.
+    culled: &'a wgpu::RenderPipeline,
+
+    water: WaterPass<'a>,
 }
 
 struct Gpu
@@ -522,10 +610,17 @@ struct Gpu
     frame:       wgpu::Buffer,
     frame_group: wgpu::BindGroup,
     parts:       Vec<GpuPart>,
+    culling:     Culling,
+
+    /// Culling of the camera; the reflection has its own, see [`Water`].
+    camera: CullView,
+
+    water:       Option<Water>,
     lightmapped: bool,
     paths:       Option<GpuPaths>,
     target:      Option<Target>,
     texture_id:  Option<TextureId>,
+
 }
 
 pub struct ModelViewer
@@ -541,7 +636,11 @@ pub struct ModelViewer
 
     light:   Light,
     missing: Vec<String>,
-    dirty:   bool,
+
+    /// API the device lacks, see [`culling::unsupported`].
+    unsupported: Vec<&'static str>,
+
+    dirty: bool,
 
     /// Where a double click puts the camera back.
     home: Camera,
@@ -599,11 +698,22 @@ impl ModelViewer
         self
     }
 
+    /// For a whole level, where most of it is out of sight.
+    pub fn with_occlusion( mut self ) -> Self
+    {
+        self.options.occlusion = true;
+        self.defaults = self.options;
+        self.dirty = true;
+
+        self
+    }
+
     /// The scene's `<Ambient>`, 0 to 255 per channel, as the base lighting instead of the sun.
     /// Doubled like the lightmaps, as the game's final `MODULATE2X` stage does.
     pub fn with_ambient( mut self, ambient: Option<[f32; 3]> ) -> Self
     {
         self.ambient = ambient.map( |rgb| rgb.map( |channel| ( channel / 255.0 ) * 2.0 ) );
+        self.level   = true;
         // Outdoor scenes fade into haze; interiors are closed rooms.
         self.options.fog = ambient.is_none();
         self.defaults = self.options;
@@ -622,7 +732,8 @@ impl ModelViewer
         self
     }
 
-    pub fn show( &mut self, sections: &mut Sections, palette: &Palette )
+    /// `shown` picks the overlays: frame time, statistics, coordinates and the axis gizmo.
+    pub fn show( &mut self, sections: &mut Sections, palette: &Palette, shown: &ViewerSettings )
     {
         let changed = self.options != self.defaults;
         let render  = widgets::icon_toggle( &mut sections.action_left, palette, icons::RENDER, changed ).on_hover_text( t!( "model.render" ) );
@@ -630,6 +741,10 @@ impl ModelViewer
             |ui|
             {
                 self.dirty |= ui.checkbox( &mut self.options.no_cull, t!( "model.no_cull" ) ).changed();
+                if self.gpu.culling.cluster_count() > 1
+                {
+                    self.dirty |= ui.checkbox( &mut self.options.occlusion, t!( "model.occlusion" ) ).changed();
+                }
                 if self.gpu.lightmapped
                 {
                     self.dirty |= ui.checkbox( &mut self.options.lightmaps, t!( "model.lightmaps" ) ).changed();
@@ -701,14 +816,38 @@ impl ModelViewer
             paint_lights( view, palette, rect, &self.camera, &self.lights, &self.switched_off, light );
         }
 
-        let mut segments = vec!
-        [
-            t!( self.stats.kind ).into_owned(),
-            i18n::count( "model.surfaces", self.stats.surfaces ),
-            i18n::count( "model.vertices", self.stats.vertices ),
-            i18n::count( "model.triangles", self.stats.triangles ),
-        ];
+        // Read even when hidden, so the readback keeps going.
+        let ( visible, pending ) = self.gpu.camera.visible( &self.gpu.state.device );
+        let clusters = self.gpu.culling.cluster_count();
 
+        if pending
+        {
+            sections.view.ctx().request_repaint();
+        }
+
+        let mut segments = Vec::new();
+
+        if shown.show_stats
+        {
+            segments.extend(
+                [
+                    t!( self.stats.kind ).into_owned(),
+                    i18n::count( "model.surfaces", self.stats.surfaces ),
+                    i18n::count( "model.vertices", self.stats.vertices ),
+                    i18n::count( "model.triangles", self.stats.triangles ),
+                ]
+            );
+        }
+        if let Some( visible ) = visible.filter( |_| shown.show_stats && clusters > 1 )
+        {
+            segments.push( t!( "model.visible_clusters", visible = visible.clusters, total = clusters ).into_owned() );
+            segments.push( t!( "model.drawn_triangles", count = visible.triangles ).into_owned() );
+        }
+
+        if !self.unsupported.is_empty()
+        {
+            segments.push( t!( "model.unsupported", list = self.unsupported.join( ", " ) ).into_owned() );
+        }
         if !self.missing.is_empty()
         {
             segments.push( i18n::count( "model.missing", self.missing.len() ) );
@@ -718,7 +857,7 @@ impl ModelViewer
         {
             sections.footer_left.label( egui::RichText::new( "?" ).color( palette.menu_text ) ).on_hover_text( self.missing.join( "\n" ) );
         }
-        if let Some( [ x, y, z ] ) = self.camera.position()
+        if let Some( [ x, y, z ] ) = self.camera.position().filter( |_| shown.show_coordinates )
         {
             let position = [ format!( "x {x:.0}" ), format!( "y {y:.0}" ), format!( "z {z:.0}" ) ];
             sections.footer_right_segments( palette, &position );
@@ -829,7 +968,7 @@ pub fn thumbnail( state: &RenderState, data: &[u8], find_texture: FindTexture, s
     let mut gpu = Gpu::new( state, &model, &textures );
     gpu.resize( [ size, size ] );
     let uniforms = frame_uniforms( &Camera::framing( &model ), RenderMode::Shaded, Light::DEFAULT, RenderOptions::DEFAULT, None, None, [ size, size ] );
-    gpu.draw( &uniforms, Pass::TwoSided, PathView { cells: false, links: false }, None, Color32::TRANSPARENT );
+    gpu.draw( &uniforms, Pass::TwoSided, PathView { cells: false, links: false }, None, false, Color32::TRANSPARENT, false, false );
 
     // Taken out so dropping the buffers keeps the registered texture alive.
     let id        = gpu.texture_id.take()?;
@@ -986,15 +1125,15 @@ fn angle( ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, ra
 
 fn frame_uniforms( camera: &Camera, mode: RenderMode, light: Light, options: RenderOptions, ambient: Option<[f32; 3]>, fog: Option<Fog>, size: [u32; 2] ) -> FrameUniforms
 {
-    let aspect    = to_f32( usize::try_from( size[ 0 ] ).unwrap_or( 1 ) ) / to_f32( usize::try_from( size[ 1 ] ).unwrap_or( 1 ) );
+    let [ width, height ] = size.map( |side| to_f32( usize::try_from( side ).unwrap_or( 1 ) ).max( 1.0 ) );
     // The fog hides everything past its end, so the far plane clips there, as in the game.
-    let view_proj = camera.view_proj( aspect, fog.map( |fog| fog.end ) );
+    let view_proj = camera.view_proj( width / height, fog.map( |fog| fog.end ) );
 
     let [ sun_x, sun_y, sun_z ] = light.direction();
 
     let [ eye_x, eye_y, eye_z ] = camera.eye();
 
-    let mut uniforms: FrameUniforms = [ 0.0; 40 ];
+    let mut uniforms: FrameUniforms = [ 0.0; FRAME_FLOATS ];
     uniforms[ ..16 ].copy_from_slice( view_proj.as_flattened() );
     // Back to the model's own handedness, as the normals and positions are.
     uniforms[ 16..19 ].copy_from_slice( &[ sun_x, sun_y, -sun_z ] );
@@ -1013,8 +1152,27 @@ fn frame_uniforms( camera: &Camera, mode: RenderMode, light: Light, options: Ren
         uniforms[ 32..36 ].copy_from_slice( &[ red, green, blue, 1.0 ] );
         uniforms[ 36..38 ].copy_from_slice( &[ fog.start, fog.end ] );
     }
+    // No clip plane: everything is on its kept side.
+    uniforms[ 43 ] = 1.0;
+    uniforms[ 46..48 ].copy_from_slice( &[ 1.0 / width, 1.0 / height ] );
 
     uniforms
+}
+
+/// The frame mirrored in the water level at `level`: the view flipped under the plane, the eye with it,
+/// and everything below the plane cut away.
+fn reflected( uniforms: &FrameUniforms, level: f32 ) -> FrameUniforms
+{
+    let view_proj: [[f32; 4]; 4] = std::array::from_fn( |column| std::array::from_fn( |row| uniforms[ ( column * 4 ) + row ] ) );
+    let flip = [ [ 1.0, 0.0, 0.0, 0.0 ], [ 0.0, -1.0, 0.0, 0.0 ], [ 0.0, 0.0, 1.0, 0.0 ], [ 0.0, 2.0 * level, 0.0, 1.0 ] ];
+
+    let mut mirrored = *uniforms;
+    mirrored[ ..16 ].copy_from_slice( mul( view_proj, flip ).as_flattened() );
+    mirrored[ 25 ] = ( 2.0 * level ) - uniforms[ 25 ];
+    mirrored[ 40..44 ].copy_from_slice( &[ 0.0, 1.0, 0.0, CLIP_BIAS - level ] );
+    mirrored[ 45 ] = 0.0;
+
+    mirrored
 }
 
 /// Vertices split into buffers under the device's size limit, a run of whole parts each.
@@ -1173,9 +1331,10 @@ impl Gpu
 
         let views: HashMap<&str, wgpu::TextureView> = textures.iter().map( |( name, texture )| ( name.as_str(), upload_texture( state, texture ) ) ).collect();
 
+        let ( culling, records ) = Culling::new( device, model );
         let mut parts = Vec::new();
 
-        for ( part, &chunk ) in model.parts.iter().zip( &split.part_chunks )
+        for ( ( index, ( part, &chunk ) ), records ) in ( 0.. ).zip( model.parts.iter().zip( &split.part_chunks ) ).zip( records )
         {
             let key  = part.texture.as_deref().map( str::to_lowercase );
             let view = key.and_then( |key| views.get( key.as_str() ) ).unwrap_or( &white );
@@ -1191,7 +1350,7 @@ impl Gpu
             ];
             let bind_group = device.create_bind_group( &wgpu::BindGroupDescriptor { label: Some( "model part" ), layout: &part_layout, entries: &entries } );
             let light = part.lightmap.map( |( _, light )| light );
-            parts.push( GpuPart { chunk, light, uniform: color, triangles: part.triangles.clone(), edges: part.edges.clone(), bind_group } );
+            parts.push( GpuPart { chunk, light, uniform: color, records, index, water: part.water.is_some(), bind_group } );
         }
         let gpu = Self
         {
@@ -1206,6 +1365,9 @@ impl Gpu
             frame,
             frame_group,
             parts,
+            culling,
+            camera,
+            water,
             lightmapped: !model.lightmaps.is_empty(),
             paths:      None,
             target:     None,
@@ -1270,6 +1432,97 @@ impl Gpu
     fn resize( &mut self, size: [u32; 2] )
     {
         let device = &self.state.device;
+        let target = Target::new( device, size );
+        self.culling.resize( device, &mut self.camera, &target.depth, size );
+
+        if let Some( water ) = &mut self.water
+        {
+            water.resize( device, &self.culling, size );
+        }
+
+        let mut renderer = self.state.renderer.write();
+
+        match self.texture_id
+        {
+            Some( id ) => renderer.update_egui_texture_from_wgpu_texture( device, &target.resolve, wgpu::FilterMode::Linear, id ),
+            None => self.texture_id = Some( renderer.register_native_texture( device, &target.resolve, wgpu::FilterMode::Linear ) ),
+        }
+        self.target = Some( target );
+    }
+
+    /// Parts without lightmaps, as far as the culling left them, and the water if `eye` draws it as them; returns the bound vertex chunk.
+    fn draw_plain( &self, render_pass: &mut wgpu::RenderPass, eye: Eye, pass: Pass ) -> Option<usize>
+    {
+        let ( pipeline, indices ) = match pass
+        {
+            Pass::Wireframe => ( &self.wire, &self.edges ),
+            Pass::TwoSided => ( &self.fill, &self.triangles ),
+            Pass::FrontFaces => ( eye.culled, &self.triangles ),
+        };
+        render_pass.set_bind_group( 0, eye.frame, &[] );
+        render_pass.set_pipeline( pipeline );
+        render_pass.set_index_buffer( indices.slice( .. ), wgpu::IndexFormat::Uint32 );
+
+        let edges     = matches!( pass, Pass::Wireframe );
+        let plain     = matches!( eye.water, WaterPass::Plain );
+        let mut bound = None;
+
+        for part in self.parts.iter().filter( |part| part.light.is_none() && ( plain || !part.water ) )
+        {
+            self.draw_part( render_pass, eye, part, edges, &mut bound );
+        }
+
+        bound
+    }
+
+    /// A part's draws, one per cluster; the culled ones have no instances.
+    fn draw_part( &self, render_pass: &mut wgpu::RenderPass, eye: Eye, part: &GpuPart, edges: bool, bound: &mut Option<usize> )
+    {
+        let Some( vertices ) = self.vertices.get( part.chunk ) else { return };
+        if part.records.is_empty()
+        {
+            return;
+        }
+        if *bound != Some( part.chunk )
+        {
+            render_pass.set_vertex_buffer( 0, vertices.slice( .. ) );
+            *bound = Some( part.chunk );
+        }
+        render_pass.set_bind_group( 1, &part.bind_group, &[] );
+        self.culling.draw( eye.culling, render_pass, part.index, &part.records, edges );
+    }
+}
+
+    /// What the water reads: the reflection in `resolve`.
+    fn group( &self, device: &wgpu::Device, resolve: &wgpu::TextureView ) -> wgpu::BindGroup
+    {
+        let entries =
+        [
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView( resolve ) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler( &self.sampler ) },
+        ];
+
+        device.create_bind_group( &wgpu::BindGroupDescriptor { label: Some( "reflection" ), layout: &self.layout, entries: &entries } )
+    }
+
+    /// A reflection for frames of `size`, smaller by [`REFLECTION_DIVISOR`].
+    fn resize( &mut self, device: &wgpu::Device, culling: &Culling, size: [u32; 2] )
+    {
+        let size   = size.map( |side| ( side / REFLECTION_DIVISOR ).max( 1 ) );
+        let target = Target::new( device, size );
+        culling.resize( device, &mut self.culling, &target.depth, size );
+
+        let group      = self.group( device, &target.resolve );
+        let reflection = Reflection { target, group };
+        self.reflection = Some( reflection );
+    }
+}
+
+impl Target
+{
+    /// Multisampled color and depth of `size`, and the color resolved for reading.
+    fn new( device: &wgpu::Device, size: [u32; 2] ) -> Self
+    {
         let texture = |label: &str, format: wgpu::TextureFormat, samples: u32, usage: wgpu::TextureUsages|
         {
             let descriptor = wgpu::TextureDescriptor
@@ -1285,125 +1538,15 @@ impl Gpu
             };
             device.create_texture( &descriptor ).create_view( &wgpu::TextureViewDescriptor::default() )
         };
-        let target = Target
+        let target = Self
         {
             size,
             msaa:    texture( "model msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT ),
             resolve: texture( "model color", COLOR_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING ),
-            depth:   texture( "model depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT ),
+            depth:   texture( "model depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING ),
         };
 
-        let mut renderer = self.state.renderer.write();
-
-        match self.texture_id
-        {
-            Some( id ) => renderer.update_egui_texture_from_wgpu_texture( device, &target.resolve, wgpu::FilterMode::Linear, id ),
-            None => self.texture_id = Some( renderer.register_native_texture( device, &target.resolve, wgpu::FilterMode::Linear ) ),
-        }
-        self.target = Some( target );
-    }
-
-    /// `lights` turns the lightmap overlays on, all but the switched off ones.
-    fn draw( &self, uniforms: &FrameUniforms, pass: Pass, paths: PathView, lights: Option<&HashSet<u32>>, background: Color32 )
-    {
-        let Some( target ) = &self.target else { return };
-        let queue = &self.state.queue;
-        queue.write_buffer( &self.frame, 0, bytemuck::cast_slice( uniforms ) );
-        let mut encoder = self.state.device.create_command_encoder( &wgpu::CommandEncoderDescriptor { label: Some( "model" ) } );
-
-        let [ r, g, b, a ] = background.to_normalized_gamma_f32();
-        let clear = wgpu::Color { r: f64::from( r ), g: f64::from( g ), b: f64::from( b ), a: f64::from( a ) };
-        let color = wgpu::RenderPassColorAttachment
-        {
-            view:           &target.msaa,
-            depth_slice:    None,
-            resolve_target: Some( &target.resolve ),
-            ops:            wgpu::Operations { load: wgpu::LoadOp::Clear( clear ), store: wgpu::StoreOp::Discard },
-        };
-        let depth = wgpu::RenderPassDepthStencilAttachment
-        {
-            view:        &target.depth,
-            depth_ops:   Some( wgpu::Operations { load: wgpu::LoadOp::Clear( 0.0 ), store: wgpu::StoreOp::Discard } ),
-            stencil_ops: None,
-        };
-        let pass_descriptor = wgpu::RenderPassDescriptor
-        {
-            label:                    Some( "model" ),
-            color_attachments:        &[ Some( color ) ],
-            depth_stencil_attachment: Some( depth ),
-            timestamp_writes:         None,
-            occlusion_query_set:      None,
-            multiview_mask:           None,
-        };
-
-        {
-            let mut render_pass = encoder.begin_render_pass( &pass_descriptor );
-            render_pass.set_bind_group( 0, &self.frame_group, &[] );
-            let wireframe = matches!( pass, Pass::Wireframe );
-
-            let ( pipeline, indices ) = match pass
-            {
-                Pass::Wireframe => ( &self.wire, &self.edges ),
-                Pass::TwoSided => ( &self.fill, &self.triangles ),
-                Pass::FrontFaces => ( &self.fill_culled, &self.triangles ),
-            };
-            render_pass.set_pipeline( pipeline );
-            render_pass.set_index_buffer( indices.slice( .. ), wgpu::IndexFormat::Uint32 );
-            let mut bound = None;
-
-            for part in self.parts.iter().filter( |part| part.light.is_none() )
-            {
-                let range = if wireframe { part.edges.clone() } else { part.triangles.clone() };
-                let Some( vertices ) = self.vertices.get( part.chunk ) else { continue };
-                if range.is_empty()
-                {
-                    continue;
-                }
-                if bound != Some( part.chunk )
-                {
-                    render_pass.set_vertex_buffer( 0, vertices.slice( .. ) );
-                    bound = Some( part.chunk );
-                }
-                render_pass.set_bind_group( 1, &part.bind_group, &[] );
-                render_pass.draw_indexed( range, 0, 0..1 );
-            }
-
-            if let Some( switched_off ) = lights.filter( |_| !wireframe )
-            {
-                render_pass.set_pipeline( &self.overlay );
-                for part in &self.parts
-                {
-                    let Some( light ) = part.light else { continue };
-                    let Some( vertices ) = self.vertices.get( part.chunk ) else { continue };
-                    if switched_off.contains( &light ) || part.triangles.is_empty()
-                    {
-                        continue;
-                    }
-                    if bound != Some( part.chunk )
-                    {
-                        render_pass.set_vertex_buffer( 0, vertices.slice( .. ) );
-                        bound = Some( part.chunk );
-                    }
-                    render_pass.set_bind_group( 1, &part.bind_group, &[] );
-                    render_pass.draw_indexed( part.triangles.clone(), 0, 0..1 );
-                }
-            }
-
-            if let Some( gpu_paths ) = &self.paths
-            {
-                render_pass.set_pipeline( &gpu_paths.pipeline );
-                render_pass.set_vertex_buffer( 0, gpu_paths.vertices.slice( .. ) );
-                render_pass.set_index_buffer( gpu_paths.indices.slice( .. ), wgpu::IndexFormat::Uint32 );
-                for ( range, shown ) in [ ( gpu_paths.cells.clone(), paths.cells ), ( gpu_paths.links.clone(), paths.links ) ]
-                {
-                    if shown && !range.is_empty()
-                    {
-                        render_pass.draw_indexed( range, 0, 0..1 );
-                    }
-                }
-            }
-        }
-        queue.submit( [ encoder.finish() ] );
+        target
     }
 }
 
@@ -1419,6 +1562,36 @@ impl Drop for Gpu
 }
 
 /// Front faces wind clockwise, as in the game's Direct3D, and stay so through the mirrored view.
+/// A pass over the frame: `clear` starts it anew, otherwise it goes on from the previous pass; the `last` one resolves.
+fn begin_pass<'a>( encoder: &'a mut wgpu::CommandEncoder, target: &Target, clear: Option<wgpu::Color>, last: bool ) -> wgpu::RenderPass<'a>
+{
+    let store = if last { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store };
+    let color = wgpu::RenderPassColorAttachment
+    {
+        view:           &target.msaa,
+        depth_slice:    None,
+        resolve_target: last.then_some( &target.resolve ),
+        ops:            wgpu::Operations { load: clear.map_or( wgpu::LoadOp::Load, wgpu::LoadOp::Clear ), store },
+    };
+    let depth = wgpu::RenderPassDepthStencilAttachment
+    {
+        view:        &target.depth,
+        depth_ops:   Some( wgpu::Operations { load: if clear.is_some() { wgpu::LoadOp::Clear( 0.0 ) } else { wgpu::LoadOp::Load }, store } ),
+        stencil_ops: None,
+    };
+    let descriptor = wgpu::RenderPassDescriptor
+    {
+        label:                    Some( "model" ),
+        color_attachments:        &[ Some( color ) ],
+        depth_stencil_attachment: Some( depth ),
+        timestamp_writes:         None,
+        occlusion_query_set:      None,
+        multiview_mask:           None,
+    };
+
+    encoder.begin_render_pass( &descriptor )
+}
+
 /// A blended pipeline draws over what is there: it keeps the depth and passes on equal depth.
 fn pipeline( device: &wgpu::Device, layout: &wgpu::PipelineLayout, shader: &wgpu::ShaderModule, fragment: &str, topology: wgpu::PrimitiveTopology, cull_mode: Option<wgpu::Face>, blend: Option<wgpu::BlendState> ) -> wgpu::RenderPipeline
 {
@@ -1535,11 +1708,6 @@ fn upload( state: &RenderState, width: u32, height: u32, mips: &[Vec<u8>], forma
     }
 
     texture.create_view( &wgpu::TextureViewDescriptor::default() )
-}
-
-fn to_usize( value: u32 ) -> usize
-{
-    usize::try_from( value ).unwrap_or( usize::MAX )
 }
 
 /// wgpu rejects zero-sized buffers.

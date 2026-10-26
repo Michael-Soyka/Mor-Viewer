@@ -1,6 +1,8 @@
 use std::collections::{ HashMap, HashSet };
 use std::path::{ Path, PathBuf };
+use std::time::{ Duration, Instant };
 
+use eframe::egui_wgpu::wgpu;
 use eframe::egui::{
     self, Align, CornerRadius, CursorIcon, FontId, Key, Layout, Pos2, Rect, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, UiBuilder, Vec2,
 };
@@ -141,6 +143,7 @@ pub struct ViewerApp
     title_bar:  TitleBar,
     library:    Library,
     expanded:   HashSet<NodeKey>,
+
     filter:     String,
     rows:       Vec<Row>,
     rows_dirty: bool,
@@ -164,6 +167,7 @@ pub struct ViewerApp
     checker:       TextureHandle,
     render_state:  Option<eframe::egui_wgpu::RenderState>,
     message:       Option<String>,
+
 }
 
 impl ViewerApp
@@ -301,11 +305,12 @@ impl ViewerApp
         self.rows_dirty = true;
     }
 
+    /// While searching, a toggle collapses or reopens the folder; otherwise it expands or collapses it.
     fn on_toggle( &mut self, node: NodeKey )
     {
         if !self.expanded.remove( &node )
         {
-            self.expanded.insert( node );
+            set.insert( node );
         }
         self.rows_dirty = true;
     }
@@ -842,7 +847,7 @@ impl ViewerApp
         let checker = &self.checker;
         let error = match self.active.and_then( |index| self.tabs.get_mut( index ) )
         {
-            Some( tab ) => tab.viewer.show( &mut body_ui, palette, checker, &tab.data ),
+            Some( tab ) => tab.viewer.show( &mut body_ui, palette, checker, &tab.data, &self.settings.viewer ),
             None =>
             {
                 let hint = if self.library.archives.is_empty() { t!( "blank.open_folder" ) } else { t!( "blank.select_file" ) };
@@ -1200,7 +1205,7 @@ impl eframe::App for ViewerApp
         eframe::set_value( storage, settings::STORAGE_KEY, &self.settings );
     }
 
-    fn ui( &mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame )
+    fn ui( &mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame )
     {
         let ctx = ui.ctx().clone();
         self.apply_theme( &ctx );

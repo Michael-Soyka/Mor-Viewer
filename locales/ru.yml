@@ -99,6 +99,11 @@ model:
   lighting: Освещение
   render: Отрисовка
   no_cull: Без отсечения граней
+  occlusion: Скрывать заслонённое
+  visible_clusters: "Видно кластеров: %{visible} / %{total}"
+  drawn_triangles: "Отрисовано треугольников: %{count}"
+  frame_time: "%{fps} FPS · %{ms} мс"
+  unsupported: "Устройство не поддерживает: %{list}"
   lightmaps: Лайтмапы
   fog: Туман
   fog_start: Начало
@@ -156,6 +161,11 @@ settings:
   theming: Оформление
   about: О программе
   game: Игра
+  viewer: Просмотрщик
+  show_fps: Показывать FPS
+  show_coordinates: Показывать координаты
+  show_stats: Показывать статистику сцены
+  show_orientation: Показывать положение в пространстве
   data_folder: Папка data
   data_folder_hint: Не указана. Без неё приложение запускается пустым.
   browse: Обзор…
