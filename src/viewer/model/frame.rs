@@ -102,7 +102,7 @@ pub struct RenderOptions
 impl RenderOptions
 {
     /// A single object; scenes turn lightmaps and occlusion on, see [`ModelViewer::with_lightmaps`].
-    pub const DEFAULT: Self = Self { no_cull: true, lightmaps: false, fog: false, occlusion: false, reflections: true, time_of_day: false };
+    pub const DEFAULT: Self = Self { no_cull: true, lightmaps: false, fog: false, occlusion: false, reflections: false, time_of_day: false };
 }
 
 /// Directional sun fixed in the world.
