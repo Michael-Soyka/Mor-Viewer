@@ -13,8 +13,8 @@ use morscene::Scene;
 
 use rust_i18n::t;
 use crate::data::gltf;
-use crate::data::library::{ FileKey, Library, NodeKey, Row, RowKind, file_name };
-use crate::data::preview::Kind;
+use crate::data::library::{ self, FileKey, Library, NodeKey, Row, RowKind, file_name };
+use crate::data::preview::{ self, Kind };
 use crate::i18n;
 use crate::settings::{ self, AboutInfo, Page, Settings, SidebarLayout };
 use crate::ui::icons;
@@ -221,7 +221,7 @@ impl ViewerApp
             }
             else
             {
-                app.on_open_archives( &[ path ] );
+                app.on_open_paths( &cc.egui_ctx, &[ path ] );
             }
         }
 
@@ -230,7 +230,7 @@ impl ViewerApp
 
     fn on_open_folder( &mut self, dir: &Path )
     {
-        let ( library, errors ) = Library::open_folder( dir );
+        let ( library, errors ) = Library::open_folder( dir, self.settings.load_unpacked );
         self.message = match ( errors.is_empty(), library.archives.is_empty() )
         {
             ( false, _ ) => Some( errors.join( "; " ) ),
@@ -240,13 +240,27 @@ impl ViewerApp
         self.set_library( library );
     }
 
-    /// Adds the archives to the open ones and expands them.
-    fn on_open_archives( &mut self, paths: &[PathBuf] )
+    /// Adds archives and unpacked folders to the tree, expanded; game files open in tabs of their own,
+    /// textures first, so the models opened with them find them.
+    fn on_open_paths( &mut self, ctx: &egui::Context, paths: &[PathBuf] )
     {
-        let mut errors = Vec::new();
+        let mut paths = paths.to_vec();
+        paths.sort_by_key( |path| preview::kind_of( &path.to_string_lossy() ) != Kind::Texture );
 
-        for path in paths
+        let mut errors = Vec::new();
+        let mut files  = Vec::new();
+
+        for path in &paths
         {
+            if library::is_game_file( path )
+            {
+                match self.library.add_file( path )
+                {
+                    Ok( key ) => files.push( key ),
+                    Err( err ) => errors.push( err ),
+                }
+                continue;
+            }
             match self.library.add_archive( path )
             {
                 Ok( archive ) =>
@@ -258,6 +272,11 @@ impl ViewerApp
         }
         self.message = ( !errors.is_empty() ).then( || errors.join( "; " ) );
         self.rows_dirty = true;
+
+        for key in files
+        {
+            self.on_open_file( ctx, key, true );
+        }
     }
 
     /// Closes the archive and its tabs; keys of the archives after it move down by one.
@@ -339,7 +358,7 @@ impl ViewerApp
         }
 
         let Some( ( archive, entry ) ) = self.library.entry( key ) else { return };
-        let data = match archive.vfs.read_entry( entry )
+        let data = match archive.read( key.entry )
         {
             Ok( data ) => data,
             Err( err ) =>
@@ -456,7 +475,7 @@ impl ViewerApp
     fn on_export_file( &mut self, key: FileKey, export: Export )
     {
         let Some( ( archive, entry ) ) = self.library.entry( key ) else { return };
-        let data = match archive.vfs.read_entry( entry )
+        let data = match archive.read( key.entry )
         {
             Ok( data ) => data,
             Err( err ) =>
@@ -507,10 +526,15 @@ impl ViewerApp
                         {
                             self.on_open_folder( &dir );
                         }
-                        if ui.button( t!( "menu.open_archive" ) ).clicked()
-                            && let Some( paths ) = rfd::FileDialog::new().add_filter( "VFS", &[ morvfs::EXTENSION ] ).pick_files()
+                        if ui.button( t!( "menu.open_files" ) ).clicked()
+                            && let Some( paths ) = open_files_dialog().pick_files()
                         {
-                            self.on_open_archives( &paths );
+                            self.on_open_paths( ui.ctx(), &paths );
+                        }
+                        if ui.button( t!( "menu.open_unpacked" ) ).clicked()
+                            && let Some( dir ) = rfd::FileDialog::new().pick_folder()
+                        {
+                            self.on_open_paths( ui.ctx(), &[ dir ] );
                         }
                         ui.separator();
                         if ui.button( t!( "menu.preferences" ) ).clicked()
@@ -745,7 +769,7 @@ impl ViewerApp
     fn load_thumbnail( &self, ctx: &egui::Context, key: FileKey, kind: Kind ) -> Option<Thumbnail>
     {
         let ( archive, entry ) = self.library.entry( key )?;
-        let data = archive.vfs.read_entry( entry ).ok()?;
+        let data = archive.read( key.entry ).ok()?;
 
         match kind
         {
@@ -864,7 +888,7 @@ impl ViewerApp
             Some( tab ) => tab.viewer.show( &mut body_ui, palette, checker, &tab.data, &self.settings.viewer ),
             None =>
             {
-                let hint = if self.library.archives.is_empty() { t!( "blank.open_folder" ) } else { t!( "blank.select_file" ) };
+                let hint = if self.library.archive_count() == 0 { t!( "blank.open_folder" ) } else { t!( "blank.select_file" ) };
                 viewer::show_blank( &mut body_ui, palette, &hint );
                 None
             }
@@ -891,11 +915,14 @@ impl ViewerApp
         {
             Some( ( tab, archive ) ) =>
             {
-                segments.push( archive.name.clone() );
-                segments.push( tab.name.clone() );
+                match archive.loose_path( tab.key.entry )
+                {
+                    Some( path ) => segments.push( path.display().to_string() ),
+                    None => segments.extend( [ archive.name.clone(), tab.name.clone() ] ),
+                }
                 segments.push( i18n::count( "status.bytes", tab.data.len() ) );
             }
-            None if !self.library.archives.is_empty() => segments.push( i18n::count( "status.archives", self.library.archives.len() ) ),
+            None if self.library.archive_count() > 0 => segments.push( i18n::count( "status.archives", self.library.archive_count() ) ),
             None => {}
         }
         segments.extend( self.message.clone() );
@@ -923,13 +950,14 @@ impl ViewerApp
         };
         let language  = self.settings.language;
         let game_data = self.settings.game_data.clone();
+        let unpacked  = self.settings.load_unpacked;
         let open      = settings::show( ctx, self.palette, &mut self.settings, &mut page, &AboutInfo { renderer } );
         self.preferences = open.then_some( page );
         if self.settings.language != language
         {
             i18n::apply( self.settings.language );
         }
-        if self.settings.game_data != game_data
+        if ( self.settings.game_data != game_data || self.settings.load_unpacked != unpacked )
             && let Some( dir ) = self.settings.game_data.clone()
         {
             self.on_open_folder( &dir );
@@ -1025,6 +1053,17 @@ fn title_menu_style( style: &mut egui::Style )
     egui::containers::menu::menu_style( style );
     style.spacing.button_padding = Vec2::new( 4.0, 2.0 );
     style.spacing.item_spacing.x = 4.0;
+}
+
+/// Archives and the game files the viewers show first, then anything.
+fn open_files_dialog() -> rfd::FileDialog
+{
+    let mut extensions = vec![ morvfs::EXTENSION, mortex::EXTENSION, morft::EXTENSION, morscene::INTERIOR_EXTENSION, morscene::OUTDOOR_EXTENSION ];
+    extensions.extend( preview::MODEL_EXTENSIONS );
+    extensions.extend( preview::TEXT_EXTENSIONS );
+    extensions.extend( [ preview::OGG_EXTENSION, preview::MAP_EXTENSION, preview::PATH_EXTENSION ] );
+
+    rfd::FileDialog::new().add_filter( t!( "dialog.game_files" ), &extensions ).add_filter( t!( "dialog.all_files" ), &[ "*" ] )
 }
 
 /// `None` when the dialog is cancelled.
@@ -1251,6 +1290,15 @@ impl eframe::App for ViewerApp
 
         let palette = self.palette;
         self.shortcuts( &ctx );
+
+        let dropped: Vec<PathBuf> = ctx.input( |input| input.raw.dropped_files.iter().map( |file| file.path().to_owned() ).collect() );
+        if !dropped.is_empty()
+        {
+            self.on_open_paths( &ctx, &dropped );
+        }
+
+        let open: HashSet<FileKey> = self.tabs.iter().map( |tab| tab.key ).collect();
+        self.library.retain_files( &open );
 
         egui::Panel::top( "title_bar" )
             .exact_size( title_bar::HEIGHT )

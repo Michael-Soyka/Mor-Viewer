@@ -91,6 +91,9 @@ pub struct Settings
     /// The game's data folder; when set, its archives load at startup.
     pub game_data: Option<PathBuf>,
 
+    /// Open the folders unpacked next to the data folder's archives too, see [`crate::data::library::Library::open_folder`].
+    pub load_unpacked: bool,
+
     pub viewer: ViewerSettings,
 }
 
@@ -106,6 +109,7 @@ impl Default for Settings
             ui_scale:          1.0,
             theme:             Theme::Dark,
             game_data:         Some( PathBuf::from( STEAM_GAME_DATA ) ).filter( |dir| dir.is_dir() ),
+            load_unpacked:     false,
             viewer:            ViewerSettings::default(),
         };
 
@@ -308,6 +312,10 @@ fn game( ui: &mut egui::Ui, palette: &Palette, settings: &mut Settings )
     };
     ui.add_space( 6.0 );
     ui.label( egui::RichText::new( path ).size( theme::TEXT_SIZE ).color( color ) );
+    ui.add_space( 6.0 );
+
+    switch( ui, palette, &t!( "settings.load_unpacked" ), &mut settings.load_unpacked );
+    ui.label( egui::RichText::new( t!( "settings.load_unpacked_hint" ) ).size( theme::TEXT_SIZE ).color( palette.menu_text ) );
 }
 
 fn viewer( ui: &mut egui::Ui, palette: &Palette, settings: &mut ViewerSettings )

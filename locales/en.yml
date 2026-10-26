@@ -5,7 +5,8 @@ _version: 1
 menu:
   file: File
   open_folder: Open data folder…
-  open_archive: Open archives…
+  open_files: Open files…
+  open_unpacked: Open unpacked folder…
   preferences: Preferences…
   exit: Exit
   view: View
@@ -23,6 +24,10 @@ context:
 
 sidebar:
   search: Search
+
+dialog:
+  game_files: Game files
+  all_files: All files
 
 blank:
   open_folder: Open the game data folder via File
@@ -178,6 +183,8 @@ settings:
   show_orientation: Show orientation
   data_folder: Data folder
   data_folder_hint: Not set. Without it the app starts empty.
+  load_unpacked: Load unpacked folders
+  load_unpacked_hint: Folders next to the archives open too, and their files take precedence. A folder without archives opens whole.
   browse: Browse…
   clear: Clear
   language: Language
