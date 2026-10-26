@@ -12,6 +12,7 @@ use morscene::path::PathFinding;
 use crate::library::Library;
 use crate::model::{ self, Model };
 use crate::model_viewer::{ self, PathLines, SceneLight, Textures };
+use crate::weather::{ self, SkyImages };
 
 /// Wider textures load from a smaller mip: a city uses hundreds of them.
 const TEXTURE_LIMIT: u32 = 512;
@@ -49,6 +50,9 @@ pub struct LoadedScene
 
     /// Game position and direction of the start point.
     pub start: Option<([f32; 3], [f32; 3])>,
+
+    /// The game's sky, for outdoor scenes.
+    pub sky: Option<SkyImages>,
 
 }
 

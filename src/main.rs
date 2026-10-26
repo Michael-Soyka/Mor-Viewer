@@ -25,6 +25,7 @@ mod texture_viewer;
 mod theme;
 mod title_bar;
 mod viewer;
+mod weather;
 mod widgets;
 mod xml_viewer;
 

@@ -101,6 +101,11 @@ model:
   no_cull: Без отсечения граней
   occlusion: Скрывать заслонённое
   reflections: Отражения
+  time_of_day: Время суток
+  hour: Час
+  weather_clear: Ясно
+  weather_cloudy: Пасмурно
+  weather_rain: Дождь
   visible_clusters: "Видно кластеров: %{visible} / %{total}"
   drawn_triangles: "Отрисовано треугольников: %{count}"
   frame_time: "%{fps} FPS · %{ms} мс"

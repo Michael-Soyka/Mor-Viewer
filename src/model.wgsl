@@ -16,6 +16,10 @@ struct Frame {
     water: vec4<f32>,
     // rgb: the background, what water reflects without a reflection.
     sky: vec4<f32>,
+    // rgb: the time of day's sun, w: 1 when it lights the scene with the ambient above.
+    sun: vec4<f32>,
+    // Layers of the sky and whether it is drawn, read by sky.wgsl.
+    sky_layers: vec4<f32>,
 };
 
 // Share of the reflection in water seen from straight above.
@@ -83,20 +87,38 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     return output;
 }
 
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let mode = frame.params.x;
-    let texel = textureSample(albedo, albedo_sampler, input.uv);
-    if (mode >= 1.5 && part.color.a > 0.5 && texel.a < 0.5) {
-        discard;
-    }
-    // Two-sided lighting: the game draws most surfaces without culling, so the normal faces the viewer.
+// Two-sided lighting: the game draws most surfaces without culling, so the normal faces the viewer.
+fn diffuse(input: VertexOutput) -> f32 {
     var normal = normalize(input.normal);
     if (dot(normal, frame.eye.xyz - input.position) < 0.0) {
         normal = -normal;
     }
-    let diffuse = max(dot(normal, frame.light.xyz), 0.0);
-    let lighting = mix(1.0, 0.35 + (0.65 * diffuse), frame.params.y);
+    return max(dot(normal, frame.light.xyz), 0.0);
+}
+
+fn sun(input: VertexOutput) -> f32 {
+    return mix(1.0, 0.35 + (0.65 * diffuse(input)), frame.params.y);
+}
+
+// Light on a surface: an interior's ambient, the time of day's ambient and sun, or the plain sun.
+fn surrounding(input: VertexOutput) -> vec3<f32> {
+    if (frame.ambient.w > 0.5) {
+        return frame.ambient.rgb;
+    }
+    if (frame.sun.w > 0.5) {
+        return frame.ambient.rgb + (frame.sun.rgb * mix(0.5, diffuse(input), frame.params.y));
+    }
+    return vec3<f32>(sun(input));
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let mode = frame.params.x;
+    let texel = textureSample(albedo, albedo_sampler, input.uv);
+    if ((mode >= 1.5 && part.color.a > 0.5 && texel.a < 0.5) || clipped(input.position)) {
+        discard;
+    }
+    let lighting = sun(input);
     if (mode < 1.5) {
         return vec4<f32>(vec3<f32>(0.78) * lighting, 1.0);
     }
@@ -105,9 +127,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (mode < 2.5) {
         return vec4<f32>(mix(base, frame.fog_color.rgb, fog), 1.0);
     }
-    // Interiors have no sun, only their ambient light; lightmap overlays add the rest.
-    let surrounding = select(vec3<f32>(lighting), frame.ambient.rgb, frame.ambient.w > 0.5);
-    return vec4<f32>(mix(base * surrounding, frame.fog_color.rgb, fog), 1.0);
+    // See `surrounding`; lightmap overlays add the rest.
+    return vec4<f32>(mix(base * surrounding(input), frame.fog_color.rgb, fog), 1.0);
 }
 
 @fragment
@@ -127,6 +148,31 @@ fn fs_lightmap(input: VertexOutput) -> @location(0) vec4<f32> {
     // Added light fades with the fog, as the plain pass under it does.
     let fade = 1.0 - fog_amount(input.position);
     return vec4<f32>(texel.rgb * part.color.rgb * part.light.rgb * (2.0 * baked) * fade, 1.0);
+}
+
+// Water in the textured modes, after the game's water shaders: see-through from above and opaque at grazing views,
+// its alpha the Fresnel term (Schlick's approximation) plus a little. The river mirrors its level, the pond only shines.
+// Levels not mirrored this frame reflect the background.
+@fragment
+fn fs_water(input: VertexOutput) -> @location(0) vec4<f32> {
+    let reflected = textureSample(reflection, reflection_sampler, input.clip.xy * frame.water.zw).rgb;
+    let mirrored = frame.water.y > 0.5 && part.water.x == frame.water.x;
+    let lit = select(vec3<f32>(1.0), surrounding(input), frame.params.x > 2.5);
+    let base = part.color.rgb * lit;
+    let view = normalize(frame.eye.xyz - input.position);
+    let fresnel = WATER_REFLECTANCE + ((1.0 - WATER_REFLECTANCE) * pow(1.0 - abs(view.y), 5.0));
+    let light = normalize(frame.light.xyz);
+
+    var color: vec3<f32>;
+    if (part.water.y > 0.5) {
+        color = mix(base, select(frame.sky.rgb, reflected, mirrored), fresnel);
+    } else {
+        let highlight = pow(max(normalize(view + light).y, 0.0), WATER_SHININESS) * frame.params.y;
+        color = base + vec3<f32>(highlight);
+    }
+    let fog = fog_amount(input.position);
+    let alpha = min(fresnel + WATER_OPACITY, 1.0);
+    return vec4<f32>(mix(color, frame.fog_color.rgb, fog), mix(alpha, 1.0, fog));
 }
 
 // Path lines carry their color in the normal slot.
