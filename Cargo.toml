@@ -16,11 +16,13 @@ mormesh = { version = "0.1.0", path = "../mor-parsers/crates/mormesh", features 
 mortex = { version = "0.1.0", path = "../mor-parsers/crates/mortex" }
 morvfs = { version = "0.1.0", path = "../mor-parsers/crates/morvfs" }
 rfd = "0.17.2"
-ron = "0.12"
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 rust-i18n = "3"
 serde = { version = "1", features = ["derive"] }
 sys-locale = "0.3"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 # Texture decoding is unbearably slow unoptimized.
 [profile.dev.package."*"]

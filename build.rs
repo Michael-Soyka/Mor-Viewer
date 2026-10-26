@@ -28,4 +28,21 @@ fn main()
 
     println!( "cargo::rustc-env=MOR_BUILD={build}" );
     println!( "cargo::rustc-env=MOR_COMMIT={commit}" );
+
+    #[ cfg( windows ) ]
+    embed_icon();
+}
+
+/// The executable's icon for Explorer and shortcuts; the window sets its own at runtime.
+#[ cfg( windows ) ]
+fn embed_icon()
+{
+    if std::env::var( "CARGO_CFG_TARGET_OS" ).is_ok_and( |os| os != "windows" )
+    {
+        return;
+    }
+
+    let mut resource = winresource::WindowsResource::new();
+    resource.set_icon( "assets/icons/app.ico" );
+    resource.compile().expect( "icon resource compiles" );
 }

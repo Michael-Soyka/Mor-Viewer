@@ -170,8 +170,6 @@ settings:
   about: О программе
   game: Игра
   viewer: Просмотрщик
-  backend: Графический API
-  backend_hint: Новый API начнёт работать после перезапуска.
   vsync: Вертикальная синхронизация
   fps_limit: Ограничение FPS
   show_fps: Показывать FPS
