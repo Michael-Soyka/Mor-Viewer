@@ -159,6 +159,10 @@ struct TimeOfDay
     hour:    f32,
     weather: Weather,
 
+    /// The street lights burn at night only, as the world script switches them; see [`ModelViewer::with_street_lights`].
+    street_lights: bool,
+}
+
 /// Distance fog of the viewer; the game sets its own from scripts and the time of day.
 #[ derive( Clone, Copy, PartialEq ) ]
 struct Fog
@@ -786,6 +790,9 @@ pub struct ModelViewer
     /// Lights whose lightmaps are left out, by actor id; a click on a marker switches one.
     switched_off: HashSet<u32>,
 
+    /// The street lights the world script switches with the hour, by actor id.
+    street_lights: HashSet<u32>,
+
     /// Lighting of a scene without sun, in place of it; see [`ModelViewer::with_ambient`].
     ambient: Option<[f32; 3]>,
 
@@ -819,7 +826,7 @@ impl ModelViewer
         let unsupported = culling::unsupported( &state.adapter, &state.device );
         let stats       = Stats { kind: model.kind, surfaces: model.surfaces, vertices: model.vertices.len(), triangles: model.triangle_count() };
 
-        Self { gpu, stats, home: camera.clone(), camera, mode: RenderMode::Shaded, options: RenderOptions::DEFAULT, defaults: RenderOptions::DEFAULT, light: Light::DEFAULT, missing, dirty: true, hint_until: None, lights: Vec::new(), show_lights: true, paths: PathView { cells: false, links: false }, switched_off: HashSet::new(), ambient: None, fog: Fog::DEFAULT }
+        Self { gpu, blur, player, stats, home: camera.clone(), camera, mode: RenderMode::Shaded, options: RenderOptions::DEFAULT, defaults: RenderOptions::DEFAULT, light: Light::DEFAULT, missing, dirty: true, hint_until: None, lights: Vec::new(), show_lights: true, paths: PathView { cells: false, links: false }, switched_off: HashSet::new(), street_lights: HashSet::new(), ambient: None, level: false, capture: CursorCapture::default(), fog: Fog::DEFAULT, frame_time: FrameTime::default(), time: None, unsupported }
     }
 
     /// Light markers, and the lights' colors for their lightmaps.
@@ -861,6 +868,31 @@ impl ModelViewer
         // Outdoor scenes fade into haze; interiors are closed rooms.
         self.options.fog = ambient.is_none();
         self.defaults = self.options;
+        self.dirty = true;
+
+        self
+    }
+
+    /// The game's sky over an outdoor level, at [`START_HOUR`] on a cloudy day.
+    pub fn with_sky( mut self, images: Option<&SkyImages> ) -> Self
+    {
+        if let Some( images ) = images
+        {
+            self.gpu.set_sky( images );
+            self.time = Some( TimeOfDay { hour: START_HOUR, weather: Weather::Cloudy, street_lights: true } );
+            self.options.time_of_day = true;
+            self.defaults = self.options;
+            self.on_time_change();
+        }
+
+        self
+    }
+
+    /// `street` are the lights the world script switches with the hour; `off` start switched off, as the game has them.
+    pub fn with_street_lights( mut self, street: HashSet<u32>, off: &HashSet<u32> ) -> Self
+    {
+        self.street_lights = street;
+        self.switched_off.extend( off );
         self.dirty = true;
 
         self
@@ -992,7 +1024,16 @@ impl ModelViewer
         }
         if self.show_lights
         {
-            paint_lights( view, palette, rect, &self.camera, &self.lights, &self.switched_off, light );
+            paint_lights( view, palette, rect, &self.camera, &self.lights, &self.lights_out(), light );
+        }
+        if let Some( blurred ) = self.blur.id()
+        {
+            sections.set_backdrop( blurred, rect );
+        }
+        if let Some( seconds ) = self.frame_time.seconds.filter( |_| shown.show_fps )
+        {
+            let text = t!( "model.frame_time", fps = format!( "{:.0}", 1.0 / seconds ), ms = format!( "{:.1}", seconds * 1000.0 ) );
+            sections.top_text( plate, &text );
         }
 
         // Read even when hidden, so the readback keeps going.
@@ -1054,8 +1095,34 @@ impl ModelViewer
             }
         }
 
-        let corner = sections.corner( PIVOT_PLATE );
-        paint_pivot( sections.view.painter(), corner.center(), &self.camera );
+        if shown.show_orientation
+        {
+            let corner = sections.corner( PIVOT_PLATE );
+            paint_pivot( sections.view.painter(), corner.center(), &self.camera );
+        }
+    }
+
+    /// The fog follows the hour, as the game's weather script sets it; without the time of day it is the viewer's own.
+    fn on_time_change( &mut self )
+    {
+        self.dirty = true;
+        let Some( time ) = self.time.filter( |_| self.options.time_of_day ) else
+        {
+            self.fog = Fog::DEFAULT;
+            return;
+        };
+        let sky = weather::at( time.hour, time.weather );
+        let [ red, green, blue ] = sky.fog.map( |channel| to_byte( channel * 255.0 ) );
+        self.fog = Fog { start: weather::FOG_START, end: weather::FOG_END, color: Color32::from_rgb( red, green, blue ) };
+    }
+
+    /// Lights left out of the frame: those switched off by hand, and the street lights by day while they follow the hour.
+    fn lights_out( &self ) -> HashSet<u32>
+    {
+        let by_day = self.time.is_some_and( |time| self.options.time_of_day && time.street_lights && !weather::street_lights_on( time.hour ) );
+        let out    = if by_day { self.switched_off.union( &self.street_lights ).copied().collect() } else { self.switched_off.clone() };
+
+        out
     }
 
     fn on_switch_light( &mut self, id: u32 )
@@ -1126,8 +1193,11 @@ impl ModelViewer
                 ( _, false ) => Pass::FrontFaces,
             };
             let textured = matches!( self.mode, RenderMode::Material | RenderMode::Shaded );
-            let lights   = ( self.options.lightmaps && textured ).then_some( &self.switched_off );
-            self.gpu.draw( &uniforms, pass, self.paths, lights, background );
+            let out      = self.lights_out();
+            let lights   = ( self.options.lightmaps && textured ).then_some( &out );
+            self.gpu.draw( &uniforms, pass, self.paths, lights, self.options.occlusion, background, textured, self.options.reflections );
+            self.blur.run();
+            self.frame_time.on_frame();
         }
 
         self.gpu.texture_id
@@ -1319,6 +1389,39 @@ fn angle( ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, ra
     ui.end_row();
 
     result.is_some()
+}
+
+/// Hour slider and weather choice; returns whether either changed.
+fn time_settings( ui: &mut egui::Ui, palette: &Palette, time: &mut TimeOfDay ) -> bool
+{
+    let before = *time;
+
+    egui::Grid::new( "time" ).show(
+        ui,
+        |ui|
+        {
+            ui.label( t!( "model.hour" ) );
+            if let Some( hour ) = widgets::slider( ui, palette, time.hour, ( 0.0, 24.0 ) )
+            {
+                time.hour = ( hour * 4.0 ).round() / 4.0;
+            }
+            let minutes = from_f32( ( time.hour * 60.0 ).round() );
+            ui.label( format!( "{:02}:{:02}", ( minutes / 60 ) % 24, minutes % 60 ) );
+            ui.end_row();
+        }
+    );
+    ui.horizontal(
+        |ui|
+        {
+            for weather in Weather::ALL
+            {
+                ui.selectable_value( &mut time.weather, weather, t!( weather.key() ) );
+            }
+        }
+    );
+    ui.checkbox( &mut time.street_lights, t!( "model.street_lights" ) );
+
+    *time != before
 }
 
 /// Rounded and held to 0..255; Rust has no `TryFrom<f32>` for integers.

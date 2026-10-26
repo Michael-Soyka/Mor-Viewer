@@ -103,6 +103,7 @@ model:
   reflections: Отражения
   time_of_day: Время суток
   hour: Час
+  street_lights: Фонари по времени суток
   weather_clear: Ясно
   weather_cloudy: Пасмурно
   weather_rain: Дождь
