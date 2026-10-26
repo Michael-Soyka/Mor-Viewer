@@ -103,6 +103,7 @@ model:
   visible_clusters: "Видно кластеров: %{visible} / %{total}"
   drawn_triangles: "Отрисовано треугольников: %{count}"
   frame_time: "%{fps} FPS · %{ms} мс"
+  frame: "Кадр %{current}/%{total}"
   unsupported: "Устройство не поддерживает: %{list}"
   lightmaps: Лайтмапы
   fog: Туман

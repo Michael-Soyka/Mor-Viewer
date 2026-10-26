@@ -152,8 +152,11 @@ pub struct Sections
     /// Right-to-left: the first widget added is the rightmost.
     pub footer_right: egui::Ui,
 
-    /// Background slots reserved under each floating part, filled once its size is known.
-    plates: Option<[ShapeIdx; 4]>,
+    /// Floating only: a row of its own above the footer, left to right, as for playback.
+    pub timeline: Option<egui::Ui>,
+
+    /// Background slots reserved under each floating part, the timeline last, filled once its size is known.
+    plates: Option<[ShapeIdx; 5]>,
 
     plate_fill: Color32,
 
@@ -187,8 +190,9 @@ impl Sections
         let ( action_right, b ) = plate( ui, top, Layout::right_to_left( Align::Center ) );
         let ( footer_left, c ) = plate( ui, bottom, Layout::left_to_right( Align::Center ) );
         let ( footer_right, d ) = plate( ui, bottom, Layout::right_to_left( Align::Center ) );
+        let ( timeline, e ) = plate( ui, above, Layout::left_to_right( Align::Center ) );
 
-        Self { action_left, action_right, view, footer_left, footer_right, plates: Some( [ a, b, c, d ] ), plate_fill: palette.plate }
+        Self { action_left, action_right, view, footer_left, footer_right, timeline: Some( timeline ), plates: Some( [ a, b, c, d, e ] ), plate_fill: palette.plate, backdrop: None }
     }
 
     pub fn docked( ui: &mut egui::Ui ) -> Self
@@ -213,6 +217,7 @@ impl Sections
             view,
             footer_left:  row( ui, footer, Layout::left_to_right( Align::Center ) ),
             footer_right: row( ui, footer, Layout::right_to_left( Align::Center ) ),
+            timeline:     None,
             plates:       None,
             plate_fill:   Color32::TRANSPARENT,
             backdrop:     None,
@@ -270,12 +275,26 @@ impl Sections
         status_segments( &mut self.footer_right, palette, segments.iter().rev() );
     }
 
-    /// Text on a plate centered over the view, just above the footer; `opacity` fades it out.
+    /// Text on a plate centered at the top of the view, in the row of the action bar.
+    pub fn top_text( &self, palette: &Palette, text: &str )
+    {
+        let painter = self.view.painter();
+        let view    = self.view.max_rect();
+        let galley  = painter.layout_no_wrap( text.to_owned(), egui::FontId::proportional( theme::STATUS_TEXT_SIZE ), palette.text );
+        let center  = Pos2::new( view.center().x, view.min.y + PLATE_INSET + PLATE_PADDING + ( PLATE_ROW / 2.0 ) );
+        let text    = Rect::from_center_size( center, galley.size() );
+
+        painter.add( self.plate( text.expand( PLATE_PADDING ), palette.plate, 1.0 ) );
+        painter.galley( text.min, galley, palette.text );
+    }
+
+    /// Text on a plate centered over the view, just above the footer and the timeline if it holds anything; `opacity` fades it out.
     pub fn hint( &self, palette: &Palette, text: &str, opacity: f32 )
     {
         let painter = self.view.painter();
         let galley  = painter.layout_no_wrap( text.to_owned(), egui::FontId::proportional( theme::STATUS_TEXT_SIZE ), palette.text.gamma_multiply( opacity ) );
-        let bottom  = self.footer_left.max_rect().min.y - PLATE_PADDING - PLATE_GAP;
+        let row     = self.timeline.as_ref().filter( |timeline| timeline.min_rect().width() > 0.0 ).unwrap_or( &self.footer_left );
+        let bottom  = row.max_rect().min.y - PLATE_PADDING - PLATE_GAP;
         let center  = Pos2::new( self.view.max_rect().center().x, bottom - PLATE_PADDING - ( galley.size().y / 2.0 ) );
         let text    = Rect::from_center_size( center, galley.size() );
 
@@ -301,7 +320,7 @@ impl Drop for Sections
     fn drop( &mut self )
     {
         let Some( slots ) = self.plates else { return };
-        let parts = [ &self.action_left, &self.action_right, &self.footer_left, &self.footer_right ];
+        let parts = [ Some( &self.action_left ), Some( &self.action_right ), Some( &self.footer_left ), Some( &self.footer_right ), self.timeline.as_ref() ];
         for ( part, slot ) in parts.into_iter().zip( slots )
         {
             let Some( part ) = part else { continue };

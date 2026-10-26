@@ -4,6 +4,7 @@ use std::ops::Range;
 use mormesh::layout::interior::InteriorSurface;
 use mormesh::{ LightmapPage, Material, Mesh, Surface };
 use rust_i18n::t;
+use crate::animation::Skeleton;
 
 /// The game draws water with its own shader; a flat tint stands in for it.
 const WATER_COLOR: [f32; 4] = [ 0.25, 0.42, 0.55, 0.0 ];
@@ -74,6 +75,8 @@ pub struct Model
     /// Translation key of the mesh layout.
     pub kind: &'static str,
 
+    /// Bones and animations of a character; its vertices are the mesh's, in order.
+    pub skeleton: Option<Skeleton>,
 }
 
 /// Surface geometry borrowed from a parsed mesh.
@@ -312,7 +315,12 @@ impl Model
     {
         let mesh              = Mesh::parse( data ).map_err( |err| err.to_string() )?;
         let ( kind, sources ) = sources( &mesh )?;
-        let model             = Self::merge( kind, &sources );
+        let mut model         = Self::merge( kind, &sources );
+
+        if let Mesh::Character( character ) = &mesh
+        {
+            model.skeleton = Skeleton::new( character );
+        }
 
         Ok( model )
     }
@@ -345,7 +353,7 @@ impl Model
             .fold( 0.0f32, f32::max )
             .max( 0.001 );
 
-        Self { vertices, triangles, edges, parts, lightmaps, center, radius, surfaces: sources.len(), kind }
+        Self { vertices, triangles, edges, parts, lightmaps, clusters, center, radius, surfaces: sources.len(), kind, skeleton: None }
     }
 
     pub fn triangle_count( &self ) -> usize
