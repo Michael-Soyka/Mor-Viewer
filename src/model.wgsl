@@ -18,6 +18,15 @@ struct Frame {
     sky: vec4<f32>,
 };
 
+// Share of the reflection in water seen from straight above.
+const WATER_REFLECTANCE: f32 = 0.02;
+
+// The game's water lets this much more through: its alpha is the Fresnel term plus this.
+const WATER_OPACITY: f32 = 0.05;
+
+// Highlight of the pond, which shines but mirrors nothing.
+const WATER_SHININESS: f32 = 64.0;
+
 // Below the mirror plane of a reflection pass.
 fn clipped(position: vec3<f32>) -> bool {
     return (dot(frame.clip.xyz, position) + frame.clip.w) < 0.0;
@@ -35,6 +44,8 @@ struct Part {
     color: vec4<f32>,
     // rgb: color of the light a lightmap overlay is baked for.
     light: vec4<f32>,
+    // x: height of the water level of a water part, y: 1 when it mirrors the scene.
+    water: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
