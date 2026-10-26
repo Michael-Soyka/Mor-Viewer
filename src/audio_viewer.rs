@@ -1,7 +1,7 @@
 use std::num::NonZero;
 use std::time::Duration;
 
-use eframe::egui::{ self, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Vec2 };
+use eframe::egui::{ self, Pos2, Sense, Stroke };
 use rodio::buffer::SamplesBuffer;
 use rodio::{ DeviceSinkBuilder, MixerDeviceSink, Player };
 
@@ -10,11 +10,10 @@ use crate::i18n;
 use crate::preview::Audio;
 use crate::theme::{ self, Palette };
 use crate::viewer::Sections;
-use crate::widgets::{ from_f32, to_f32 };
+use crate::widgets::{ self, from_f32, to_f32 };
 
 const PEAK_BUCKETS: usize = 2048;
 const WAVE_PADDING: f32   = 16.0;
-const BUTTON_SIZE:  f32   = 22.0;
 
 pub struct AudioViewer
 {
@@ -48,7 +47,7 @@ impl AudioViewer
         let playing   = self.player.as_ref().is_some_and( |player| !player.is_paused() && !player.empty() );
         let position  = self.current_position();
 
-        if play_button( &mut sections.action_left, palette, playing ).clicked()
+        if widgets::play_button( &mut sections.action_left, palette, playing ).clicked()
         {
             let toggled = if playing { Ok( self.on_pause() ) } else { self.on_play() };
             error = toggled.err();
@@ -192,34 +191,6 @@ impl Drop for AudioViewer
             player.stop();
         }
     }
-}
-
-fn play_button( ui: &mut egui::Ui, palette: &Palette, playing: bool ) -> egui::Response
-{
-    let ( rect, response ) = ui.allocate_exact_size( Vec2::splat( BUTTON_SIZE ), Sense::click() );
-    let painter = ui.painter();
-    if response.hovered()
-    {
-        painter.rect_filled( rect, CornerRadius::same( theme::CONTROL_RADIUS ), palette.hovered );
-    }
-
-    let icon = Rect::from_center_size( rect.center(), Vec2::splat( 10.0 ) );
-
-    if playing
-    {
-        for left in [ icon.min.x + 1.0, icon.max.x - 4.0 ]
-        {
-            let bar = Rect::from_min_size( Pos2::new( left, icon.min.y ), Vec2::new( 3.0, icon.height() ) );
-            painter.rect_filled( bar, CornerRadius::ZERO, palette.text );
-        }
-    }
-    else
-    {
-        let points = vec![ icon.left_top() + Vec2::new( 1.0, 0.0 ), Pos2::new( icon.max.x, icon.center().y ), icon.left_bottom() + Vec2::new( 1.0, 0.0 ) ];
-        painter.add( Shape::convex_polygon( points, palette.text, Stroke::NONE ) );
-    }
-
-    response
 }
 
 fn peaks( audio: &Audio ) -> Vec<(f32, f32)>

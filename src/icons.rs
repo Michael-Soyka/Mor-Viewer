@@ -23,3 +23,6 @@ pub const MATERIAL:  ImageSource<'static> = include_image!( "../assets/icons/ren
 pub const SHADED:    ImageSource<'static> = include_image!( "../assets/icons/render/shaded.svg" );
 pub const LIGHT:     ImageSource<'static> = include_image!( "../assets/icons/render/light.svg" );
 pub const RENDER:    ImageSource<'static> = include_image!( "../assets/icons/render/render.svg" );
+
+pub const PLAY:  ImageSource<'static> = include_image!( "../assets/icons/actions/play.svg" );
+pub const PAUSE: ImageSource<'static> = include_image!( "../assets/icons/actions/pause.svg" );
