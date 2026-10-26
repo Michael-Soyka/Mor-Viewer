@@ -2,9 +2,9 @@ use eframe::egui::{ Align2, Pos2, Rect, ScrollArea, Sense, Stroke, TextStyle, Ve
 
 use rust_i18n::t;
 use crate::i18n;
-use crate::theme::Palette;
+use crate::ui::theme::Palette;
+use crate::ui::widgets::{ self, from_f32, to_f32 };
 use crate::viewer::Sections;
-use crate::widgets::{ self, from_f32, to_f32 };
 
 const PADDING:       f32        = 6.0;
 const ROW_GAP:       f32        = 2.0;

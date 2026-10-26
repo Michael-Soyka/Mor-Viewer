@@ -179,9 +179,9 @@ fn fonts( theme: egui::Theme ) -> FontDefinitions
     let mut fonts = FontDefinitions::default();
     let faces =
     [
-        ( "jetbrains-mono", &include_bytes!( "../assets/fonts/JetBrainsMono-Regular.ttf" )[ .. ] ),
-        ( "jetbrains-mono-light", &include_bytes!( "../assets/fonts/JetBrainsMono-Light.ttf" )[ .. ] ),
-        ( "jetbrains-mono-bold", &include_bytes!( "../assets/fonts/JetBrainsMono-Bold.ttf" )[ .. ] ),
+        ( "jetbrains-mono", &include_bytes!( "../../assets/fonts/JetBrainsMono-Regular.ttf" )[ .. ] ),
+        ( "jetbrains-mono-light", &include_bytes!( "../../assets/fonts/JetBrainsMono-Light.ttf" )[ .. ] ),
+        ( "jetbrains-mono-bold", &include_bytes!( "../../assets/fonts/JetBrainsMono-Bold.ttf" )[ .. ] ),
     ];
     for ( name, data ) in faces
     {

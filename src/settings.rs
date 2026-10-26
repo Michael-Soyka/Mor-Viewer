@@ -7,8 +7,8 @@ use serde::{ Deserialize, Serialize };
 
 use rust_i18n::t;
 use crate::i18n::{ self, Language };
-use crate::theme::{ self, Palette, Theme };
-use crate::widgets;
+use crate::ui::theme::{ self, Palette, Theme };
+use crate::ui::widgets;
 
 pub const STORAGE_KEY: &str = "settings";
 

@@ -43,7 +43,7 @@ impl Blur
         let shader_source = wgpu::ShaderModuleDescriptor
         {
             label:  Some( "blur" ),
-            source: wgpu::ShaderSource::Wgsl( include_str!( "blur.wgsl" ).into() ),
+            source: wgpu::ShaderSource::Wgsl( include_str!( "shaders/blur.wgsl" ).into() ),
         };
         let shader = device.create_shader_module( shader_source );
 

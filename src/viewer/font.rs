@@ -3,12 +3,12 @@ use eframe::egui::{ self, Color32, ColorImage, CornerRadius, Pos2, Rect, ScrollA
 use morft::Font;
 
 use rust_i18n::t;
+use crate::data::preview;
 use crate::i18n;
-use crate::preview;
-use crate::texture_viewer::to_usize;
-use crate::theme::{ self, Palette };
+use crate::ui::theme::{ self, Palette };
+use crate::ui::widgets::{ self, Zoom, from_f32, to_f32 };
 use crate::viewer::Sections;
-use crate::widgets::{ self, Zoom, from_f32, to_f32 };
+use crate::viewer::texture::to_usize;
 
 const SCALE_MIN:    f32 = 1.0;
 const SCALE_MAX:    f32 = 8.0;

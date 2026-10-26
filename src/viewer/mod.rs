@@ -1,3 +1,12 @@
+pub mod audio;
+pub mod font;
+pub mod hex;
+pub mod map;
+pub mod model;
+pub mod scene;
+pub mod texture;
+pub mod xml;
+
 use std::path::PathBuf;
 
 use eframe::egui::layers::ShapeIdx;
@@ -6,18 +15,19 @@ use eframe::egui::{ self, Align, Color32, CornerRadius, LayerId, Layout, Order, 
 use eframe::egui_wgpu::RenderState;
 
 use rust_i18n::t;
-use crate::audio_viewer::AudioViewer;
-use crate::font_viewer::FontViewer;
-use crate::hex_viewer::HexViewer;
-use crate::map_viewer::MapViewer;
-use crate::model_viewer::ModelViewer;
-use crate::preview::Preview;
-use crate::scene_viewer::SceneViewer;
+use crate::data::preview::Preview;
 use crate::settings::ViewerSettings;
-use crate::texture_viewer::TextureViewer;
-use crate::theme::{ self, Palette };
-use crate::widgets::{ self, BAR_HEIGHT };
-use crate::xml_viewer::XmlViewer;
+use crate::ui::theme::{ self, Palette };
+use crate::ui::widgets::{ self, BAR_HEIGHT };
+
+use audio::AudioViewer;
+use font::FontViewer;
+use hex::HexViewer;
+use map::MapViewer;
+use model::ModelViewer;
+use scene::SceneViewer;
+use texture::TextureViewer;
+use xml::XmlViewer;
 
 const BAR_PADDING: f32 = 8.0;
 
