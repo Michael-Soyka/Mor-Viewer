@@ -2193,6 +2193,7 @@ dependencies = [
 [[package]]
 name = "morft"
 version = "0.1.0"
+source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "indexmap",
  "thiserror 2.0.21",
@@ -2201,6 +2202,7 @@ dependencies = [
 [[package]]
 name = "mormesh"
 version = "0.1.0"
+source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -2211,6 +2213,7 @@ dependencies = [
 [[package]]
 name = "morscene"
 version = "0.1.0"
+source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -2222,6 +2225,7 @@ dependencies = [
 [[package]]
 name = "mortex"
 version = "0.1.0"
+source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "ddsfile",
  "texpresso",
@@ -2231,6 +2235,7 @@ dependencies = [
 [[package]]
 name = "morvfs"
 version = "0.1.0"
+source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "encoding_rs",
  "indexmap",

@@ -10,11 +10,11 @@ egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 encoding_rs = "0.8"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tga"] }
 lewton = "0.10"
-morft = { version = "0.1.0", path = "../mor-parsers/crates/morft" }
-morscene = { version = "0.1.0", path = "../mor-parsers/crates/morscene", features = ["gltf"] }
-mormesh = { version = "0.1.0", path = "../mor-parsers/crates/mormesh", features = ["gltf"] }
-mortex = { version = "0.1.0", path = "../mor-parsers/crates/mortex" }
-morvfs = { version = "0.1.0", path = "../mor-parsers/crates/morvfs" }
+morft = { version = "0.1.0", git = "https://github.com/Michael-Soyka/Mor-parser" }
+morscene = { version = "0.1.0", git = "https://github.com/Michael-Soyka/Mor-parser", features = ["gltf"] }
+mormesh = { version = "0.1.0", git = "https://github.com/Michael-Soyka/Mor-parser", features = ["gltf"] }
+mortex = { version = "0.1.0", git = "https://github.com/Michael-Soyka/Mor-parser" }
+morvfs = { version = "0.1.0", git = "https://github.com/Michael-Soyka/Mor-parser" }
 rfd = "0.17.2"
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 rust-i18n = "3"
