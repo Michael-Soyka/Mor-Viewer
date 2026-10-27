@@ -1,17 +1,19 @@
 # Mor Viewer
 
+**Русский** | [English](README.en.md)
+
 Просмотрщик ресурсов для игры "Мор. Утопия" (Pathologic).
 
-<img width="1712" height="863" alt="image" src="https://github.com/user-attachments/assets/d0e05b74-aa4f-4eac-b8f0-cf11f8c6f5f9" />
-<p align="center"><b>City view</b></p>
+<img width="1712" height="863" alt="image" src=".github/images/world.png" />
+<p align="center"><b>Вид: Город</b></p>
 
-| Model view | Interior view |
+| Вид: Модель | Вид: Интерьер |
 | -             | -             |
-| <img width="1712" height="863" alt="model-view" src="https://github.com/user-attachments/assets/99510ae2-e516-4c82-80ac-cbf484d434a7" /> | <img width="1712" height="863" alt="interior-view" src="https://github.com/user-attachments/assets/db308130-1251-4c42-bfb5-18d61dd26d9c" /> |
+| <img width="1712" height="863" alt="model-view" src=".github/images/model-view.png" /> | <img width="1712" height="863" alt="interior-view" src=".github/images/interior-view.png" /> |
 
-| Textures view | Fonts view |
+| Вид: Текстура | Вид: Шрифт |
 | -             | -             |
-| <img width="1712" height="863" alt="texture-view" src="https://github.com/user-attachments/assets/e845f6ad-b879-4fc5-bef9-7b859479103b" /> | <img width="1712" height="863" alt="font-view" src="https://github.com/user-attachments/assets/388a4d21-521e-479c-b09e-e4b0c3a52b57" /> |
+| <img width="1712" height="863" alt="texture-view" src=".github/images/texture-view.png" /> | <img width="1712" height="863" alt="font-view" src=".github/images/font-view.png" /> |
 
 ## Возможности
 
