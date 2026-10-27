@@ -15,6 +15,8 @@ Resource viewer for the game "Pathologic" ("Мор. Утопия").
 | -             | -             |
 | <img width="1712" height="863" alt="texture-view" src=".github/images/texture-view.png" /> | <img width="1712" height="863" alt="font-view" src=".github/images/font-view.png" /> |
 
+[Desing on Figma](https://www.figma.com/design/zJDOhI3dZ83jExdDrxlsDf/Mor-Viewer?t=G1sQ7JZUY19zUTEY-1)
+
 ## Features
 
 | Type | Extensions | What it does |
