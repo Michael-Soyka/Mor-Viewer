@@ -1,5 +1,7 @@
 use std::collections::{ BTreeMap, HashMap, HashSet };
+use std::io::Cursor;
 use std::path::{ Path, PathBuf };
+use std::sync::Arc;
 
 use morvfs::{ Entry, Vfs };
 
@@ -22,6 +24,7 @@ pub struct NodeKey
 }
 
 /// An opened `.vfs` archive or a folder of unpacked game files; also, unseen in the tree, the files opened by themselves.
+#[ derive( Clone ) ]
 pub struct Archive
 {
     pub name:    String,
@@ -31,18 +34,33 @@ pub struct Archive
 }
 
 /// Where an archive's files are read from.
+#[ derive( Clone ) ]
 enum Source
 {
-    Vfs( Vfs ),
+    Vfs( Arc<Vfs> ),
+
+    /// A `.vfs` archive given by its contents: picked in the browser, which gives no paths.
+    #[ cfg_attr( not( target_arch = "wasm32" ), allow( dead_code ) ) ]
+    Memory( Arc<[u8]> ),
 
     /// Files unpacked into a folder; entry paths are relative to it.
     Unpacked( PathBuf ),
 
-    /// Files opened by themselves: the path of each entry, in order; `None` once its tab is closed.
-    Files( Vec<Option<PathBuf>> ),
+    /// Files opened by themselves, each entry in order; `None` once its tab is closed.
+    Files( Vec<Option<Loose>> ),
 }
 
-#[ derive( Default ) ]
+/// A file opened by itself: where it lies on disk, or its contents when it came without a path.
+#[ derive( Clone ) ]
+enum Loose
+{
+    Disk( PathBuf ),
+
+    #[ cfg_attr( not( target_arch = "wasm32" ), allow( dead_code ) ) ]
+    Memory( Arc<[u8]> ),
+}
+
+#[ derive( Clone, Default ) ]
 struct Folder
 {
     folders: BTreeMap<String, Folder>,
@@ -65,7 +83,8 @@ pub struct Row
     pub expanded: bool,
 }
 
-#[ derive( Default ) ]
+/// Cheap to clone: archive data is shared, for loaders on threads of their own.
+#[ derive( Clone, Default ) ]
 pub struct Library
 {
     pub archives: Vec<Archive>,
@@ -80,6 +99,12 @@ impl Archive
     pub fn open( path: &Path ) -> Result<Self, String>
     {
         let ( source, entries ) = if path.is_dir() { open_unpacked( path )? } else { open_vfs( path )? };
+
+        Ok( Self::new( path_name( path ), source, entries ) )
+    }
+
+    fn new( name: String, source: Source, entries: Vec<Entry> ) -> Self
+    {
         let mut root = Folder::default();
         for ( index, entry ) in entries.iter().enumerate()
         {
@@ -99,7 +124,7 @@ impl Archive
         }
         root.sort_files( &entries );
 
-        Ok( Self { name: path_name( path ), entries, source, root } )
+        Self { name, entries, source, root }
     }
 
     /// The group of files opened by themselves.
@@ -114,28 +139,38 @@ impl Archive
         matches!( self.source, Source::Files( _ ) )
     }
 
-    /// Where a file opened by itself lies on disk.
+    /// Where a file opened by itself lies on disk; `None` also for one that came without a path.
     pub fn loose_path( &self, index: usize ) -> Option<&Path>
+    {
+        match self.loose( index )?
+        {
+            Loose::Disk( path ) => Some( path ),
+            Loose::Memory( _ ) => None,
+        }
+    }
+
+    fn loose( &self, index: usize ) -> Option<&Loose>
     {
         let Source::Files( files ) = &self.source else { return None };
 
-        files.get( index )?.as_deref()
+        files.get( index )?.as_ref()
     }
 
     /// Whether the entry can be read: all but the files let go of.
     fn is_live( &self, index: usize ) -> bool
     {
-        !self.is_loose() || self.loose_path( index ).is_some()
+        !self.is_loose() || self.loose( index ).is_some()
     }
 
-    /// What the archive was opened from: the archive or the folder, or each of its files.
+    /// What the archive was opened from on disk: the archive or the folder, or each of its files.
     fn sources( &self ) -> Vec<&Path>
     {
         match &self.source
         {
             Source::Vfs( vfs ) => vec![ vfs.path() ],
+            Source::Memory( _ ) => Vec::new(),
             Source::Unpacked( dir ) => vec![ dir.as_path() ],
-            Source::Files( files ) => files.iter().flatten().map( PathBuf::as_path ).collect(),
+            Source::Files( _ ) => ( 0..self.entries.len() ).filter_map( |index| self.loose_path( index ) ).collect(),
         }
     }
 
@@ -145,12 +180,19 @@ impl Archive
         match &self.source
         {
             Source::Vfs( vfs ) => vfs.read_entry( entry ).map_err( |err| err.to_string() ),
-            Source::Unpacked( dir ) => std::fs::read( dir.join( &entry.path ) ).map_err( |err| err.to_string() ),
-            Source::Files( files ) =>
+            Source::Memory( data ) =>
             {
-                let path = files.get( index ).and_then( Option::as_ref ).ok_or_else( || format!( "{}: closed", entry.path ) )?;
-                std::fs::read( path ).map_err( |err| err.to_string() )
+                let mut read = Vec::new();
+                morvfs::read_entry_into( &mut Cursor::new( &data[ .. ] ), entry, &mut read ).map_err( |err| err.to_string() )?;
+
+                Ok( read )
             }
+            Source::Unpacked( dir ) => std::fs::read( dir.join( &entry.path ) ).map_err( |err| err.to_string() ),
+            Source::Files( _ ) => match self.loose( index ).ok_or_else( || format!( "{}: closed", entry.path ) )?
+            {
+                Loose::Disk( path ) => std::fs::read( path ).map_err( |err| err.to_string() ),
+                Loose::Memory( data ) => Ok( data.to_vec() ),
+            },
         }
     }
 
@@ -159,16 +201,57 @@ impl Archive
     {
         let Source::Files( files ) = &mut self.source else { return Err( format!( "{}: not a file group", self.name ) ) };
         let wanted = canonical( path );
-        if let Some( index ) = files.iter().position( |file| file.as_deref().is_some_and( |file| canonical( file ) == wanted ) )
+        if let Some( index ) = files.iter().position( |file| matches!( file, Some( Loose::Disk( file ) ) if canonical( file ) == wanted ) )
         {
             return Ok( index );
         }
 
         let metadata = std::fs::metadata( path ).map_err( |err| format!( "{}: {err}", path.display() ) )?;
-        files.push( Some( path.to_owned() ) );
+        files.push( Some( Loose::Disk( path.to_owned() ) ) );
         self.entries.push( file_entry( path_name( path ), &metadata ) );
 
         Ok( self.entries.len() - 1 )
+    }
+}
+
+/// Files given by their contents, as the browser gives them.
+#[ cfg( target_arch = "wasm32" ) ]
+impl Archive
+{
+    /// A `.vfs` archive given by its name and contents.
+    fn from_data( name: &str, data: Arc<[u8]> ) -> Result<Self, String>
+    {
+        let entries = morvfs::read_entries( &mut Cursor::new( &data[ .. ] ) ).map_err( |err| format!( "{name}: {err}" ) )?;
+
+        Ok( Self::new( name.to_owned(), Source::Memory( data ), entries ) )
+    }
+
+    /// Adds a file given by its name and contents to a group of files opened by themselves;
+    /// one by the same name that came so gets the new contents.
+    fn add_file_data( &mut self, name: &str, data: Arc<[u8]> ) -> Result<usize, String>
+    {
+        let Source::Files( files ) = &mut self.source else { return Err( format!( "{}: not a file group", self.name ) ) };
+        let size  = u32::try_from( data.len() ).unwrap_or( u32::MAX );
+        let entry = Entry { path: name.to_owned(), offset: 0, size, modified: 0 };
+        let same  = files.iter().zip( &self.entries ).position( |( file, entry )| matches!( file, Some( Loose::Memory( _ ) ) ) && entry.path == name );
+
+        let index = match same
+        {
+            Some( index ) =>
+            {
+                files[ index ] = Some( Loose::Memory( data ) );
+                self.entries[ index ] = entry;
+                index
+            }
+            None =>
+            {
+                files.push( Some( Loose::Memory( data ) ) );
+                self.entries.push( entry );
+                self.entries.len() - 1
+            }
+        };
+
+        Ok( index )
     }
 }
 
@@ -242,9 +325,15 @@ impl Library
         }
 
         let archive = Archive::open( path )?;
+
+        self.push_archive( archive )
+    }
+
+    fn push_archive( &mut self, archive: Archive ) -> Result<usize, String>
+    {
         if archive.entries.is_empty()
         {
-            return Err( format!( "{}: no files", path.display() ) );
+            return Err( format!( "{}: no files", archive.name ) );
         }
         self.archives.push( archive );
         self.by_name = names( &self.archives );
@@ -265,6 +354,11 @@ impl Library
     /// Adds a game file opened by itself, for its tab and for references by name; one already open is not added twice.
     pub fn add_file( &mut self, path: &Path ) -> Result<FileKey, String>
     {
+        self.add_loose( |files| files.add_file( path ) )
+    }
+
+    fn add_loose( &mut self, add: impl FnOnce( &mut Archive ) -> Result<usize, String> ) -> Result<FileKey, String>
+    {
         let archive = match self.archives.iter().position( Archive::is_loose )
         {
             Some( index ) => index,
@@ -274,7 +368,7 @@ impl Library
                 self.archives.len() - 1
             }
         };
-        let added = self.archives[ archive ].add_file( path );
+        let added = add( &mut self.archives[ archive ] );
 
         if self.archives[ archive ].entries.is_empty()
         {
@@ -310,12 +404,6 @@ impl Library
     pub fn archive_count( &self ) -> usize
     {
         self.archives.iter().filter( |archive| !archive.is_loose() ).count()
-    }
-
-    /// What the archives were opened from, to open them again with [`Library::open_paths`].
-    pub fn paths( &self ) -> Vec<PathBuf>
-    {
-        self.archives.iter().flat_map( |archive| archive.sources() ).map( Path::to_path_buf ).collect()
     }
 
     fn new( archives: Vec<Archive> ) -> Self
@@ -373,6 +461,30 @@ impl Library
         }
 
         rows
+    }
+}
+
+/// Files given by their contents, as the browser gives them.
+#[ cfg( target_arch = "wasm32" ) ]
+impl Library
+{
+    /// Adds a `.vfs` archive given by its name and contents; one by the same name that came so is not opened twice. Returns its index.
+    pub fn add_archive_data( &mut self, name: &str, data: Arc<[u8]> ) -> Result<usize, String>
+    {
+        if let Some( index ) = self.archives.iter().position( |archive| matches!( archive.source, Source::Memory( _ ) ) && archive.name == name )
+        {
+            return Ok( index );
+        }
+
+        let archive = Archive::from_data( name, data )?;
+
+        self.push_archive( archive )
+    }
+
+    /// Adds a game file given by its name and contents, as [`Library::add_file`] does.
+    pub fn add_file_data( &mut self, name: &str, data: Arc<[u8]> ) -> Result<FileKey, String>
+    {
+        self.add_loose( |files| files.add_file_data( name, data ) )
     }
 }
 
@@ -453,7 +565,7 @@ impl Open<'_>
 fn names( archives: &[Archive] ) -> HashMap<String, FileKey>
 {
     let mut order: Vec<usize> = ( 0..archives.len() ).collect();
-    order.sort_by_key( |&index| matches!( archives[ index ].source, Source::Vfs( _ ) ) );
+    order.sort_by_key( |&index| matches!( archives[ index ].source, Source::Vfs( _ ) | Source::Memory( _ ) ) );
 
     let mut by_name = HashMap::new();
 
@@ -484,7 +596,7 @@ fn open_vfs( path: &Path ) -> Result<(Source, Vec<Entry>), String>
     let vfs     = Vfs::open( path ).map_err( |err| format!( "{}: {err}", path.display() ) )?;
     let entries = vfs.entries().cloned().collect();
 
-    Ok( ( Source::Vfs( vfs ), entries ) )
+    Ok( ( Source::Vfs( Arc::new( vfs ) ), entries ) )
 }
 
 /// Every file under `dir` but the archives, with paths relative to it.

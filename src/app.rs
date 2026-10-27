@@ -1,5 +1,7 @@
 use std::collections::{ HashMap, HashSet };
 use std::path::{ Path, PathBuf };
+
+#[ cfg( not( target_arch = "wasm32" ) ) ]
 use std::time::{ Duration, Instant };
 
 use eframe::egui_wgpu::wgpu;
@@ -12,7 +14,10 @@ use mormesh::gltf::Gltf;
 use morscene::Scene;
 
 use rust_i18n::t;
+
+#[ cfg( not( target_arch = "wasm32" ) ) ]
 use crate::data::gltf;
+
 use crate::data::library::{ self, FileKey, Library, NodeKey, Row, RowKind, file_name };
 use crate::data::preview::{ self, Kind };
 use crate::i18n;
@@ -171,7 +176,12 @@ pub struct ViewerApp
     message:       Option<String>,
 
     /// When the last frame's UI finished, for the FPS limit.
+    #[ cfg( not( target_arch = "wasm32" ) ) ]
     frame_end: Option<Instant>,
+
+    /// Files the browser is reading, picked in its dialog or dropped on the page.
+    #[ cfg( target_arch = "wasm32" ) ]
+    picker: crate::web::Picker,
 }
 
 impl ViewerApp
@@ -210,7 +220,12 @@ impl ViewerApp
             checker:       viewer::texture::new_checker( &cc.egui_ctx ),
             render_state:  cc.wgpu_render_state.clone(),
             message:       None,
-            frame_end:     None,
+
+            #[ cfg( not( target_arch = "wasm32" ) ) ]
+            frame_end: None,
+
+            #[ cfg( target_arch = "wasm32" ) ]
+            picker: crate::web::Picker::default(),
         };
 
         if let Some( path ) = start
@@ -270,10 +285,59 @@ impl ViewerApp
                 Err( err ) => errors.push( err ),
             }
         }
+
+        self.on_opened( ctx, &files, &errors );
+    }
+
+    /// Adds `.vfs` archives and game files given by their contents, as [`ViewerApp::on_open_paths`] does by paths.
+    #[ cfg( target_arch = "wasm32" ) ]
+    fn on_open_picked( &mut self, ctx: &egui::Context, picked: Vec<Result<crate::web::Picked, String>> )
+    {
+        let mut errors = Vec::new();
+        let mut read   = Vec::new();
+
+        for file in picked
+        {
+            match file
+            {
+                Ok( file ) => read.push( file ),
+                Err( err ) => errors.push( err ),
+            }
+        }
+        read.sort_by_key( |file| preview::kind_of( &file.name ) != Kind::Texture );
+
+        let mut files = Vec::new();
+
+        for file in read
+        {
+            if preview::has_extension( &file.name, morvfs::EXTENSION )
+            {
+                match self.library.add_archive_data( &file.name, file.data )
+                {
+                    Ok( archive ) =>
+                    {
+                        self.expanded.insert( NodeKey { archive, folder: String::new() } );
+                    }
+                    Err( err ) => errors.push( err ),
+                }
+                continue;
+            }
+            match self.library.add_file_data( &file.name, file.data )
+            {
+                Ok( key ) => files.push( key ),
+                Err( err ) => errors.push( err ),
+            }
+        }
+
+        self.on_opened( ctx, &files, &errors );
+    }
+
+    fn on_opened( &mut self, ctx: &egui::Context, files: &[FileKey], errors: &[String] )
+    {
         self.message = ( !errors.is_empty() ).then( || errors.join( "; " ) );
         self.rows_dirty = true;
 
-        for key in files
+        for &key in files
         {
             self.on_open_file( ctx, key, true );
         }
@@ -370,13 +434,12 @@ impl ViewerApp
         let path      = entry.path.clone();
         let library   = &self.library;
         let find_file = |name: &str| library.read_by_name( name );
-        let archives  = library.paths();
         let resources = Resources
         {
             render_state:      self.render_state.as_ref(),
             find_file:         &find_file,
             hex_bytes_per_row: self.settings.hex_bytes_per_row,
-            archives:          &archives,
+            library,
         };
         let ( viewer, error ) = Viewer::new( ctx, &path, &data, &resources );
         self.message = error.map( |err| format!( "{path}: {err}" ) );
@@ -462,7 +525,7 @@ impl ViewerApp
         let message = match ( export, &tab.viewer )
         {
             ( Export::Raw, _ ) => save_raw_as( &tab.name, &tab.data ),
-            ( Export::Png, Viewer::Texture( viewer ) ) => save_png_as( &tab.name, |target| viewer.export_png( target ) ),
+            ( Export::Png, Viewer::Texture( viewer ) ) => save_png_as( &tab.name, || viewer.export_png() ),
             ( Export::Png, _ ) => None,
             ( Export::Gltf, _ ) => save_gltf_as( &tab.name, &tab.data, &self.library ),
         };
@@ -488,14 +551,7 @@ impl ViewerApp
         let message = match export
         {
             Export::Raw => save_raw_as( name, &data ),
-            Export::Png => save_png_as(
-                name,
-                |target|
-                {
-                    let image = viewer::texture::decode( &entry.path, &data )?;
-                    viewer::texture::save_png( &image.rgba, image.width, image.height, target )
-                }
-            ),
+            Export::Png => save_png_as( name, || viewer::texture::decode( &entry.path, &data ).and_then( |image| viewer::texture::encode_png( &image ) ) ),
             Export::Gltf => save_gltf_as( name, &data, &self.library ),
         };
         if message.is_some()
@@ -521,30 +577,20 @@ impl ViewerApp
                     t!( "menu.file" ),
                     |ui|
                     {
-                        if ui.button( t!( "menu.open_folder" ) ).clicked()
-                            && let Some( dir ) = rfd::FileDialog::new().pick_folder()
-                        {
-                            self.on_open_folder( &dir );
-                        }
-                        if ui.button( t!( "menu.open_files" ) ).clicked()
-                            && let Some( paths ) = open_files_dialog().pick_files()
-                        {
-                            self.on_open_paths( ui.ctx(), &paths );
-                        }
-                        if ui.button( t!( "menu.open_unpacked" ) ).clicked()
-                            && let Some( dir ) = rfd::FileDialog::new().pick_folder()
-                        {
-                            self.on_open_paths( ui.ctx(), &[ dir ] );
-                        }
+                        self.open_menu( ui );
                         ui.separator();
                         if ui.button( t!( "menu.preferences" ) ).clicked()
                         {
                             self.preferences = Some( Page::General );
                         }
-                        ui.separator();
-                        if ui.button( t!( "menu.exit" ) ).clicked()
+                        // A page is closed with its tab.
+                        if cfg!( not( target_arch = "wasm32" ) )
                         {
-                            ui.ctx().send_viewport_cmd( egui::ViewportCommand::Close );
+                            ui.separator();
+                            if ui.button( t!( "menu.exit" ) ).clicked()
+                            {
+                                ui.ctx().send_viewport_cmd( egui::ViewportCommand::Close );
+                            }
                         }
                     }
                 );
@@ -558,6 +604,36 @@ impl ViewerApp
                 );
             }
         );
+    }
+
+    #[ cfg( not( target_arch = "wasm32" ) ) ]
+    fn open_menu( &mut self, ui: &mut egui::Ui )
+    {
+        if ui.button( t!( "menu.open_folder" ) ).clicked()
+            && let Some( dir ) = rfd::FileDialog::new().pick_folder()
+        {
+            self.on_open_folder( &dir );
+        }
+        if ui.button( t!( "menu.open_files" ) ).clicked()
+            && let Some( paths ) = open_files_dialog().pick_files()
+        {
+            self.on_open_paths( ui.ctx(), &paths );
+        }
+        if ui.button( t!( "menu.open_unpacked" ) ).clicked()
+            && let Some( dir ) = rfd::FileDialog::new().pick_folder()
+        {
+            self.on_open_paths( ui.ctx(), &[ dir ] );
+        }
+    }
+
+    /// The browser gives files but not folders.
+    #[ cfg( target_arch = "wasm32" ) ]
+    fn open_menu( &mut self, ui: &mut egui::Ui )
+    {
+        if ui.button( t!( "menu.open_files" ) ).clicked()
+        {
+            self.picker.pick( ui.ctx(), open_files_dialog() );
+        }
     }
 
     /// Returns the top of the file list, so the main panel lines up with it.
@@ -918,6 +994,7 @@ impl ViewerApp
                 match archive.loose_path( tab.key.entry )
                 {
                     Some( path ) => segments.push( path.display().to_string() ),
+                    None if archive.is_loose() => segments.push( tab.name.clone() ),
                     None => segments.extend( [ archive.name.clone(), tab.name.clone() ] ),
                 }
                 segments.push( i18n::count( "status.bytes", tab.data.len() ) );
@@ -976,7 +1053,35 @@ impl ViewerApp
         frame.set_wgpu_surface_config( config );
     }
 
-    /// Without vsync, waits out what is left of the frame the FPS limit allows.
+    #[ cfg( not( target_arch = "wasm32" ) ) ]
+    fn open_dropped( &mut self, ctx: &egui::Context )
+    {
+        let dropped: Vec<PathBuf> = ctx.input( |input| input.raw.dropped_files.iter().map( |file| file.path().to_owned() ).collect() );
+        if !dropped.is_empty()
+        {
+            self.on_open_paths( ctx, &dropped );
+        }
+    }
+
+    /// The browser reads dropped files frames later; they come in with the picked ones.
+    #[ cfg( target_arch = "wasm32" ) ]
+    fn open_dropped( &mut self, ctx: &egui::Context )
+    {
+        let dropped = ctx.input( |input| input.raw.dropped_files.clone() );
+        if !dropped.is_empty()
+        {
+            self.picker.read_dropped( ctx, dropped );
+        }
+
+        let picked = self.picker.take();
+        if !picked.is_empty()
+        {
+            self.on_open_picked( ctx, picked );
+        }
+    }
+
+    /// Without vsync, waits out what is left of the frame the FPS limit allows. A page cannot wait; the browser paces its frames.
+    #[ cfg( not( target_arch = "wasm32" ) ) ]
     fn limit_fps( &mut self )
     {
         let viewer = self.settings.viewer;
@@ -1055,18 +1160,31 @@ fn title_menu_style( style: &mut egui::Style )
     style.spacing.item_spacing.x = 4.0;
 }
 
-/// Archives and the game files the viewers show first, then anything.
+/// Archives and the game files the viewers show first, then anything; a page's dialog takes no catch-all filter.
+#[ cfg( not( target_arch = "wasm32" ) ) ]
 fn open_files_dialog() -> rfd::FileDialog
+{
+    rfd::FileDialog::new().add_filter( t!( "dialog.game_files" ), &game_extensions() ).add_filter( t!( "dialog.all_files" ), &[ "*" ] )
+}
+
+#[ cfg( target_arch = "wasm32" ) ]
+fn open_files_dialog() -> rfd::AsyncFileDialog
+{
+    rfd::AsyncFileDialog::new().add_filter( t!( "dialog.game_files" ), &game_extensions() )
+}
+
+fn game_extensions() -> Vec<&'static str>
 {
     let mut extensions = vec![ morvfs::EXTENSION, mortex::EXTENSION, morft::EXTENSION, morscene::INTERIOR_EXTENSION, morscene::OUTDOOR_EXTENSION ];
     extensions.extend( preview::MODEL_EXTENSIONS );
     extensions.extend( preview::TEXT_EXTENSIONS );
     extensions.extend( [ preview::OGG_EXTENSION, preview::MAP_EXTENSION, preview::PATH_EXTENSION ] );
 
-    rfd::FileDialog::new().add_filter( t!( "dialog.game_files" ), &extensions ).add_filter( t!( "dialog.all_files" ), &[ "*" ] )
+    extensions
 }
 
 /// `None` when the dialog is cancelled.
+#[ cfg( not( target_arch = "wasm32" ) ) ]
 fn save_raw_as( name: &str, data: &[u8] ) -> Option<String>
 {
     let target = rfd::FileDialog::new().set_file_name( name ).save_file()?;
@@ -1076,14 +1194,61 @@ fn save_raw_as( name: &str, data: &[u8] ) -> Option<String>
 }
 
 /// `None` when the dialog is cancelled.
-fn save_png_as( name: &str, export: impl FnOnce( &Path ) -> Result<(), String> ) -> Option<String>
+#[ cfg( not( target_arch = "wasm32" ) ) ]
+fn save_png_as( name: &str, export: impl FnOnce() -> Result<Vec<u8>, String> ) -> Option<String>
 {
-    let stem   = name.rsplit_once( '.' ).map_or( name, |( stem, _ )| stem );
-    let dialog = rfd::FileDialog::new().add_filter( "PNG", &[ "png" ] ).set_file_name( format!( "{stem}.png" ) );
+    let dialog = rfd::FileDialog::new().add_filter( "PNG", &[ "png" ] ).set_file_name( format!( "{}.png", file_stem( name ) ) );
     let target = dialog.save_file()?;
-    let result = export( &target );
+    let result = export().and_then( |png| std::fs::write( &target, png ).map_err( |err| err.to_string() ) );
 
     Some( saved_message( &target, result ) )
+}
+
+/// `None` when the dialog is cancelled. `.gltf` or `.glb` is picked by the extension the user saves with.
+#[ cfg( not( target_arch = "wasm32" ) ) ]
+fn save_gltf_as( name: &str, data: &[u8], library: &Library ) -> Option<String>
+{
+    let dialog = rfd::FileDialog::new()
+        .add_filter( "glTF binary", &[ "glb" ] )
+        .add_filter( "glTF", &[ "gltf" ] )
+        .set_file_name( format!( "{}.glb", file_stem( name ) ) );
+    let target = dialog.save_file()?;
+    let result = export_gltf( name, data, library ).and_then( |gltf| gltf::save( &gltf, &target ) );
+
+    Some( saved_message( &target, result ) )
+}
+
+/// A page saves to the browser's downloads, which asks where if set so.
+#[ cfg( target_arch = "wasm32" ) ]
+fn save_raw_as( name: &str, data: &[u8] ) -> Option<String>
+{
+    Some( saved_message( Path::new( name ), crate::web::download( name, data ) ) )
+}
+
+#[ cfg( target_arch = "wasm32" ) ]
+fn save_png_as( name: &str, export: impl FnOnce() -> Result<Vec<u8>, String> ) -> Option<String>
+{
+    download_as( &format!( "{}.png", file_stem( name ) ), export )
+}
+
+/// Always `.glb`: a page saves one file at a time.
+#[ cfg( target_arch = "wasm32" ) ]
+fn save_gltf_as( name: &str, data: &[u8], library: &Library ) -> Option<String>
+{
+    download_as( &format!( "{}.glb", file_stem( name ) ), || export_gltf( name, data, library )?.to_glb().map_err( |err| err.to_string() ) )
+}
+
+#[ cfg( target_arch = "wasm32" ) ]
+fn download_as( name: &str, export: impl FnOnce() -> Result<Vec<u8>, String> ) -> Option<String>
+{
+    let result = export().and_then( |data| crate::web::download( name, &data ) );
+
+    Some( saved_message( Path::new( name ), result ) )
+}
+
+fn file_stem( name: &str ) -> &str
+{
+    name.rsplit_once( '.' ).map_or( name, |( stem, _ )| stem )
 }
 
 fn saved_message( target: &Path, result: Result<(), String> ) -> String
@@ -1095,17 +1260,11 @@ fn saved_message( target: &Path, result: Result<(), String> ) -> String
     }
 }
 
-/// `None` when the dialog is cancelled. `.gltf` or `.glb` is picked by the extension the user saves with.
 /// Meshes convert from `data`; scenes read their actors, meshes and textures from the open archives.
-fn save_gltf_as( name: &str, data: &[u8], library: &Library ) -> Option<String>
+fn export_gltf( name: &str, data: &[u8], library: &Library ) -> Result<Gltf, String>
 {
-    let stem   = name.rsplit_once( '.' ).map_or( name, |( stem, _ )| stem );
-    let dialog = rfd::FileDialog::new()
-        .add_filter( "glTF binary", &[ "glb" ] )
-        .add_filter( "glTF", &[ "gltf" ] )
-        .set_file_name( format!( "{stem}.glb" ) );
-    let target = dialog.save_file()?;
-    let read   = |file: &str| library.read_by_name( file ).map( |( _, data )| data );
+    let stem = file_stem( name );
+    let read = |file: &str| library.read_by_name( file ).map( |( _, data )| data );
     let png    = |texture: &str|
     {
         let ( path, data ) = library.read_by_name( texture )?;
@@ -1119,9 +1278,8 @@ fn save_gltf_as( name: &str, data: &[u8], library: &Library ) -> Option<String>
         Kind::Scene => Scene::load( name, read ).map( |scene| morscene::gltf::export( &scene, stem, read, read, png ).gltf ).map_err( |err| err.to_string() ),
         _ => Mesh::parse( data ).map( |mesh| Gltf::from_mesh( &mesh, stem, png ) ).map_err( |err| err.to_string() ),
     };
-    let result = exported.and_then( |gltf| gltf::save( &gltf, &target ) );
 
-    Some( saved_message( &target, result ) )
+    exported
 }
 
 /// Raw bytes for every file, plus the conversion its type has.
@@ -1291,11 +1449,7 @@ impl eframe::App for ViewerApp
         let palette = self.palette;
         self.shortcuts( &ctx );
 
-        let dropped: Vec<PathBuf> = ctx.input( |input| input.raw.dropped_files.iter().map( |file| file.path().to_owned() ).collect() );
-        if !dropped.is_empty()
-        {
-            self.on_open_paths( &ctx, &dropped );
-        }
+        self.open_dropped( &ctx );
 
         let open: HashSet<FileKey> = self.tabs.iter().map( |tab| tab.key ).collect();
         self.library.retain_files( &open );
@@ -1344,6 +1498,8 @@ impl eframe::App for ViewerApp
         self.preferences( &ctx );
         self.window_border( &ctx );
         title_bar::resize_edges( &ctx );
+
+        #[ cfg( not( target_arch = "wasm32" ) ) ]
         self.limit_fps();
     }
 }

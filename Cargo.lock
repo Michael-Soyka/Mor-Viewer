@@ -784,6 +784,8 @@ dependencies = [
  "block2 0.6.2",
  "coreaudio-rs",
  "dasp_sample",
+ "futures-channel",
+ "futures-util",
  "jni",
  "js-sys",
  "libc",
@@ -799,6 +801,8 @@ dependencies = [
  "objc2-core-audio-types",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "windows",
  "windows-core",
@@ -1412,6 +1416,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "futures-channel"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
+dependencies = [
+ "futures-core",
 ]
 
 [[package]]
@@ -2176,6 +2189,7 @@ dependencies = [
  "egui_extras",
  "encoding_rs",
  "image",
+ "js-sys",
  "lewton",
  "morft",
  "mormesh",
@@ -2187,13 +2201,16 @@ dependencies = [
  "rust-i18n",
  "serde",
  "sys-locale",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "winresource",
 ]
 
 [[package]]
 name = "morft"
 version = "0.1.0"
-source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "indexmap",
  "thiserror 2.0.21",
@@ -2202,7 +2219,6 @@ dependencies = [
 [[package]]
 name = "mormesh"
 version = "0.1.0"
-source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -2213,7 +2229,6 @@ dependencies = [
 [[package]]
 name = "morscene"
 version = "0.1.0"
-source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -2225,7 +2240,6 @@ dependencies = [
 [[package]]
 name = "mortex"
 version = "0.1.0"
-source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "ddsfile",
  "texpresso",
@@ -2235,7 +2249,6 @@ dependencies = [
 [[package]]
 name = "morvfs"
 version = "0.1.0"
-source = "git+https://github.com/Michael-Soyka/Mor-parser#b13b21aec5456fad2289195185047734363e6f96"
 dependencies = [
  "encoding_rs",
  "indexmap",

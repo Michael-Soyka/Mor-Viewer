@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mor Viewer</title>
+
+    <link data-trunk rel="rust" data-bin="mor-viewer" data-wasm-opt="0">
+    <link data-trunk rel="icon" href="assets/icons/app.svg">
+
+    <style>
+        html, body
+        {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #191a1b;
+        }
+
+        canvas
+        {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #status
+        {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 16px;
+            color: #9d9d9d;
+            font: 14px system-ui, sans-serif;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="mor_viewer"></canvas>
+    <p id="status">Loading...</p>
+</body>
+</html>

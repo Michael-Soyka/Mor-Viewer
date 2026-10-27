@@ -1,5 +1,4 @@
 use std::collections::{ HashMap, HashSet };
-use std::path::PathBuf;
 use std::sync::atomic::{ AtomicUsize, Ordering };
 
 use eframe::egui::Color32;
@@ -73,9 +72,8 @@ pub struct LoadedScene
 
 /// Every mesh the scene's actors and terrain name, merged into one model.
 /// Meshes are stored in world space, so they need no placement.
-pub fn load( archives: &[PathBuf], file: &str, progress: &Progress ) -> Result<LoadedScene, String>
+pub fn load( library: &Library, file: &str, progress: &Progress ) -> Result<LoadedScene, String>
 {
-    let ( library, _ ) = Library::open_paths( archives );
     let read = |name: &str| library.read_by_name( name ).map( |( _, data )| data );
 
     let scene = Scene::load( file, read ).map_err( |err| err.to_string() )?;

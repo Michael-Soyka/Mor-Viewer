@@ -7,14 +7,13 @@ pub mod scene;
 pub mod texture;
 pub mod xml;
 
-use std::path::PathBuf;
-
 use eframe::egui::layers::ShapeIdx;
 use eframe::egui::epaint::RectShape;
 use eframe::egui::{ self, Align, Color32, CornerRadius, LayerId, Layout, Order, Pos2, Rect, Shape, TextureHandle, TextureId, UiBuilder, Vec2 };
 use eframe::egui_wgpu::RenderState;
 
 use rust_i18n::t;
+use crate::data::library::Library;
 use crate::data::preview::Preview;
 use crate::settings::ViewerSettings;
 use crate::ui::theme::{ self, Palette };
@@ -70,7 +69,7 @@ impl Viewer
                 },
                 Preview::Scene => match resources.render_state
                 {
-                    Some( state ) => Ok( Self::Scene( SceneViewer::new( state, resources.archives.to_vec(), path.to_owned() ) ) ),
+                    Some( state ) => Ok( Self::Scene( SceneViewer::new( state, resources.library.clone(), path.to_owned() ) ) ),
                     None => Err( t!( "model.needs_wgpu" ).into_owned() ),
                 },
                 Preview::Map( map ) => Ok( Self::Map( MapViewer::new( ctx, map, resources.find_file ) ) ),
@@ -133,8 +132,8 @@ pub struct Resources<'a>
 
     pub hex_bytes_per_row: usize,
 
-    /// Paths of the opened archives, for viewers that read on a thread of their own.
-    pub archives: &'a [PathBuf],
+    /// The opened archives, for viewers that read on a thread of their own.
+    pub library: &'a Library,
 }
 
 /// Placeholder shown when no tab is open.

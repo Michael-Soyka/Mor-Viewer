@@ -22,6 +22,13 @@ const BACKDROP:        Color32    = Color32::from_rgba_unmultiplied_const( 0, 0,
 const UI_SCALES:       [f32; 7]   = [ 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0 ];
 const HEX_WIDTHS:      [usize; 4] = [ 8, 16, 32, 64 ];
 
+/// The navigation's pages; a page in the browser has no game folder to set.
+#[ cfg( not( target_arch = "wasm32" ) ) ]
+const PAGES: [Page; 4] = [ Page::General, Page::Game, Page::Viewer, Page::Theming ];
+
+#[ cfg( target_arch = "wasm32" ) ]
+const PAGES: [Page; 3] = [ Page::General, Page::Viewer, Page::Theming ];
+
 /// Steam's default install location of the game.
 const STEAM_GAME_DATA: &str = r"C:\Program Files (x86)\Steam\steamapps\common\Pathologic Classic HD\data";
 
@@ -121,7 +128,11 @@ impl Default for Settings
 pub enum Page
 {
     General,
+
+    /// Not in the browser's navigation, see [`PAGES`].
+    #[ cfg_attr( target_arch = "wasm32", allow( dead_code ) ) ]
     Game,
+
     Viewer,
     Theming,
     About,
@@ -167,7 +178,7 @@ pub fn show( ctx: &egui::Context, palette: &Palette, settings: &mut Settings, pa
             let mut nav_ui = ui.new_child( UiBuilder::new().max_rect( nav.shrink( NAV_PADDING ) ).layout( Layout::top_down( Align::Min ) ) );
             let back       = navigation( &mut nav_ui, palette, &t!( "settings.back" ), true, false );
             nav_ui.add_space( NAV_PADDING );
-            for item in [ Page::General, Page::Game, Page::Viewer, Page::Theming ]
+            for item in PAGES
             {
                 if navigation( &mut nav_ui, palette, &t!( item.key() ), false, *page == item ).clicked()
                 {
@@ -293,6 +304,7 @@ fn game( ui: &mut egui::Ui, palette: &Palette, settings: &mut Settings )
         |ui|
         {
             // Right to left: browse ends up rightmost.
+            #[ cfg( not( target_arch = "wasm32" ) ) ]
             if ui.add( egui::Button::new( t!( "settings.browse" ) ).fill( palette.border ) ).clicked()
                 && let Some( dir ) = rfd::FileDialog::new().pick_folder()
             {

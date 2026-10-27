@@ -20,9 +20,25 @@ rodio = { version = "0.23", default-features = false, features = ["playback"] }
 rust-i18n = "3"
 serde = { version = "1", features = ["derive"] }
 sys-locale = "0.3"
+web-time = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+rodio = { version = "0.23", default-features = false, features = ["playback", "wasm-bindgen"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Blob", "Document", "Element", "HtmlAnchorElement", "HtmlCanvasElement", "Url", "Window"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+# Until morvfs::read_entries is pushed to the Mor-parser repository.
+[patch."https://github.com/Michael-Soyka/Mor-parser"]
+morft    = { path = "../mor-parsers/crates/morft" }
+mormesh  = { path = "../mor-parsers/crates/mormesh" }
+morscene = { path = "../mor-parsers/crates/morscene" }
+mortex   = { path = "../mor-parsers/crates/mortex" }
+morvfs   = { path = "../mor-parsers/crates/morvfs" }
 
 # Texture decoding is unbearably slow unoptimized.
 [profile.dev.package."*"]

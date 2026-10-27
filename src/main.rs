@@ -12,7 +12,9 @@ mod settings;
 mod ui;
 mod viewer;
 
-use std::path::PathBuf;
+#[ cfg( target_arch = "wasm32" ) ]
+mod web;
+
 use std::sync::Arc;
 
 use eframe::egui_wgpu::{ self, wgpu };
@@ -20,18 +22,54 @@ use eframe::egui_wgpu::{ self, wgpu };
 rust_i18n::i18n!( "locales", fallback = "en" );
 
 /// Also names the directory eframe keeps the settings in.
+#[ cfg( not( target_arch = "wasm32" ) ) ]
 const APP_NAME: &str = "Mor Viewer";
 
-/// The one graphics API of each platform.
+/// The one graphics API of each platform; the web's is WebGPU, as the culling needs compute shaders.
 #[ cfg( target_os = "macos" ) ]
 const BACKENDS: wgpu::Backends = wgpu::Backends::METAL;
 
-#[ cfg( not( target_os = "macos" ) ) ]
+#[ cfg( target_arch = "wasm32" ) ]
+const BACKENDS: wgpu::Backends = wgpu::Backends::BROWSER_WEBGPU;
+
+#[ cfg( not( any( target_os = "macos", target_arch = "wasm32" ) ) ) ]
 const BACKENDS: wgpu::Backends = wgpu::Backends::VULKAN;
 
+/// Ids of the page's elements, see `index.html`.
+#[ cfg( target_arch = "wasm32" ) ]
+const CANVAS_ID: &str = "mor_viewer";
+
+#[ cfg( target_arch = "wasm32" ) ]
+const STATUS_ID: &str = "status";
+
+#[ cfg( target_arch = "wasm32" ) ]
+fn main()
+{
+    use wasm_bindgen::JsCast;
+
+    let document = web_sys::window().and_then( |window| window.document() ).expect( "the app runs in a page" );
+    let canvas   = document.get_element_by_id( CANVAS_ID ).and_then( |element| element.dyn_into::<web_sys::HtmlCanvasElement>().ok() ).expect( "the page has the canvas" );
+    let options  = eframe::WebOptions { wgpu_options: wgpu_options(), ..Default::default() };
+
+    let task = async move
+    {
+        let started = eframe::WebRunner::new().start( canvas, options, Box::new( |cc| Ok( Box::new( app::ViewerApp::new( cc, None ) ) ) ) ).await;
+        let status  = document.get_element_by_id( STATUS_ID );
+        match ( started, status )
+        {
+            ( Ok( () ), Some( status ) ) => status.remove(),
+            ( Err( err ), Some( status ) ) => status.set_text_content( Some( &web::error_text( &err ) ) ),
+            ( _, None ) => {}
+        }
+    };
+
+    wasm_bindgen_futures::spawn_local( task );
+}
+
+#[ cfg( not( target_arch = "wasm32" ) ) ]
 fn main() -> eframe::Result
 {
-    let start = std::env::args_os().nth( 1 ).or_else( || std::env::var_os( "PATHOLOGIC_DATA" ) ).map( PathBuf::from );
+    let start = std::env::args_os().nth( 1 ).or_else( || std::env::var_os( "PATHOLOGIC_DATA" ) ).map( std::path::PathBuf::from );
 
     let viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size( [ 1280.0, 800.0 ] )
@@ -48,14 +86,21 @@ fn main() -> eframe::Result
     #[ cfg( not( target_os = "macos" ) ) ]
     let viewport = viewport.with_decorations( false );
 
+    let options = eframe::NativeOptions { viewport, wgpu_options: wgpu_options(), ..Default::default() };
+
+    eframe::run_native( APP_NAME, options, Box::new( |cc| Ok( Box::new( app::ViewerApp::new( cc, start ) ) ) ) )
+}
+
+/// wgpu on the platform's graphics API, with the device the renderer asks for.
+fn wgpu_options() -> egui_wgpu::WgpuConfiguration
+{
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     setup.instance_descriptor.backends = BACKENDS;
     setup.device_descriptor = Arc::new( device_descriptor );
 
-    let wgpu_options = egui_wgpu::WgpuConfiguration { wgpu_setup: egui_wgpu::WgpuSetup::CreateNew( setup ), ..Default::default() };
-    let options      = eframe::NativeOptions { viewport, wgpu_options, ..Default::default() };
+    let options = egui_wgpu::WgpuConfiguration { wgpu_setup: egui_wgpu::WgpuSetup::CreateNew( setup ), ..Default::default() };
 
-    eframe::run_native( APP_NAME, options, Box::new( |cc| Ok( Box::new( app::ViewerApp::new( cc, start ) ) ) ) )
+    options
 }
 
 /// egui's device, plus the indirect draw count that lets the culling skip hidden draws.
@@ -75,6 +120,7 @@ fn device_descriptor( adapter: &wgpu::Adapter ) -> wgpu::DeviceDescriptor<'stati
 }
 
 /// The icon on its tile, rasterized for the window and the taskbar.
+#[ cfg( not( target_arch = "wasm32" ) ) ]
 fn app_icon() -> Option<eframe::egui::IconData>
 {
     let image = egui_extras::image::load_svg_bytes( include_bytes!( "../assets/icons/app-tile.svg" ), &Default::default() ).ok()?;

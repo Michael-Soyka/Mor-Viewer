@@ -4,7 +4,8 @@ mod frame;
 mod overlay;
 
 use std::collections::{ HashMap, HashSet };
-use std::time::Instant;
+
+use web_time::Instant;
 
 use eframe::egui::{ self, Color32, Pos2, Rect, Sense, TextureId };
 use eframe::egui_wgpu::RenderState;

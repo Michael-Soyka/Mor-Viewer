@@ -20,9 +20,9 @@ const CLOSE_HOVER:   Color32 = Color32::from_rgb( 0xC4, 0x2B, 0x1C );
 const CLOSE_PRESS:   Color32 = Color32::from_rgb( 0xB2, 0x27, 0x1A );
 const GLYPH_FONT:    &str    = "caption-glyphs";
 
-// macOS keeps native traffic lights; the title bar only reserves room for them.
-const CAPTION_BUTTONS: bool = cfg!( not( target_os = "macos" ) );
-const LEADING_INSET:   f32  = if CAPTION_BUTTONS { BAR_PADDING } else { 72.0 };
+// macOS keeps native traffic lights; the title bar only reserves room for them. A page has no window to control.
+const CAPTION_BUTTONS: bool = cfg!( not( any( target_os = "macos", target_arch = "wasm32" ) ) );
+const LEADING_INSET:   f32  = if cfg!( target_os = "macos" ) { 72.0 } else { BAR_PADDING };
 
 #[ derive( Clone, Copy ) ]
 enum Caption

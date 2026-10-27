@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use eframe::egui::emath::GuiRounding;
 use eframe::egui::{ self, Color32, ColorImage, Pos2, Rect, ScrollArea, Sense, TextureHandle, TextureOptions };
 use mortex::{ Image, Texture };
@@ -135,11 +133,11 @@ impl TextureViewer
         error
     }
 
-    pub fn export_png( &self, target: &Path ) -> Result<(), String>
+    pub fn export_png( &self ) -> Result<Vec<u8>, String>
     {
         let rgba = self.channels.apply( &self.image );
 
-        save_png( &rgba, self.image.width, self.image.height, target )
+        png( &rgba, self.image.width, self.image.height )
     }
 
     fn canvas( &mut self, ui: &mut egui::Ui, checker: &TextureHandle )
@@ -208,16 +206,16 @@ pub fn decode( path: &str, data: &[u8] ) -> Result<Image, String>
     texture.decode( 0, 0 ).map_err( |err| err.to_string() )
 }
 
-pub fn save_png( rgba: &[u8], width: u32, height: u32, target: &Path ) -> Result<(), String>
+pub fn encode_png( image: &Image ) -> Result<Vec<u8>, String>
 {
-    image::save_buffer( target, rgba, width, height, image::ExtendedColorType::Rgba8 ).map_err( |err| err.to_string() )
+    png( &image.rgba, image.width, image.height )
 }
 
-pub fn encode_png( image: &Image ) -> Result<Vec<u8>, String>
+fn png( rgba: &[u8], width: u32, height: u32 ) -> Result<Vec<u8>, String>
 {
     let mut bytes = Vec::new();
     let encoder   = image::codecs::png::PngEncoder::new( &mut bytes );
-    image::ImageEncoder::write_image( encoder, &image.rgba, image.width, image.height, image::ExtendedColorType::Rgba8 ).map_err( |err| err.to_string() )?;
+    image::ImageEncoder::write_image( encoder, rgba, width, height, image::ExtendedColorType::Rgba8 ).map_err( |err| err.to_string() )?;
 
     Ok( bytes )
 }

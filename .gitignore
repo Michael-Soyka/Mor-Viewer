@@ -2,6 +2,7 @@
 /target
 **/target
 /out
+/dist
 
 # Rust tooling
 **/*.rs.bk

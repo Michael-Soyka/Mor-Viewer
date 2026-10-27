@@ -1,13 +1,12 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 
 use rust_i18n::t;
+use crate::data::library::Library;
 use crate::render::scene::{ self, LoadedScene, Progress };
 use crate::settings::ViewerSettings;
 use crate::ui::theme::Palette;
@@ -22,17 +21,24 @@ pub struct SceneViewer
 {
     state:    RenderState,
     progress: Arc<Progress>,
-    task:     Option<JoinHandle<Result<LoadedScene, String>>>,
+    task:     Option<Task>,
     viewer:   Option<ModelViewer>,
 }
 
+/// The level loader: a thread of its own.
+#[ cfg( not( target_arch = "wasm32" ) ) ]
+struct Task( std::thread::JoinHandle<Result<LoadedScene, String>> );
+
+/// The level loader: the web has no threads, so the level is loaded at once.
+#[ cfg( target_arch = "wasm32" ) ]
+struct Task( Result<LoadedScene, String> );
+
 impl SceneViewer
 {
-    pub fn new( state: &RenderState, archives: Vec<PathBuf>, file: String ) -> Self
+    pub fn new( state: &RenderState, library: Library, file: String ) -> Self
     {
         let progress = Arc::new( Progress::default() );
-        let shared   = Arc::clone( &progress );
-        let task     = std::thread::spawn( move || scene::load( &archives, &file, &shared ) );
+        let task     = Task::spawn( library, file, Arc::clone( &progress ) );
 
         Self { state: state.clone(), progress, task: Some( task ), viewer: None }
     }
@@ -46,9 +52,8 @@ impl SceneViewer
         {
             match task.join()
             {
-                Ok( Ok( loaded ) ) => self.viewer = Some( viewer( &self.state, loaded ) ),
-                Ok( Err( err ) ) => error = Some( err ),
-                Err( _ ) => error = Some( t!( "scene.failed" ).into_owned() ),
+                Ok( loaded ) => self.viewer = Some( viewer( &self.state, loaded ) ),
+                Err( err ) => error = Some( err ),
             }
         }
 
@@ -67,6 +72,44 @@ impl SceneViewer
         }
 
         error
+    }
+}
+
+#[ cfg( not( target_arch = "wasm32" ) ) ]
+impl Task
+{
+    fn spawn( library: Library, file: String, progress: Arc<Progress> ) -> Self
+    {
+        Self( std::thread::spawn( move || scene::load( &library, &file, &progress ) ) )
+    }
+
+    fn is_finished( &self ) -> bool
+    {
+        self.0.is_finished()
+    }
+
+    fn join( self ) -> Result<LoadedScene, String>
+    {
+        self.0.join().unwrap_or_else( |_| Err( t!( "scene.failed" ).into_owned() ) )
+    }
+}
+
+#[ cfg( target_arch = "wasm32" ) ]
+impl Task
+{
+    fn spawn( library: Library, file: String, progress: Arc<Progress> ) -> Self
+    {
+        Self( scene::load( &library, &file, &progress ) )
+    }
+
+    fn is_finished( &self ) -> bool
+    {
+        true
+    }
+
+    fn join( self ) -> Result<LoadedScene, String>
+    {
+        self.0
     }
 }
 
