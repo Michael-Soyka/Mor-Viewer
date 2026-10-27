@@ -383,6 +383,7 @@ fn about_page( ui: &mut egui::Ui, palette: &Palette, about: &AboutInfo )
     };
     line( ui, &format!( "Mor Viewer {}.{} ({})", env!( "CARGO_PKG_VERSION" ), env!( "MOR_BUILD" ), env!( "MOR_COMMIT" ) ), palette.text );
     line( ui, &t!( "settings.description" ), palette.menu_text_hovered );
+    line( ui, "© 2026 Michael Soyka", palette.menu_text_hovered );
     ui.add_space( 12.0 );
     line( ui, &t!( "settings.renderer", name = about.renderer ), palette.menu_text_hovered );
     line( ui, &t!( "settings.font" ), palette.menu_text_hovered );
