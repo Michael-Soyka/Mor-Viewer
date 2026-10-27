@@ -1,0 +1,93 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.cargo.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: cargo
+        run: echo "version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            binary: mor-viewer.exe
+          - os: ubuntu-latest
+            platform: linux-x64
+            binary: mor-viewer
+          - os: macos-latest
+            platform: macos-arm64
+            binary: mor-viewer
+    runs-on: ${{ matrix.os }}
+    env:
+      PACKAGE: Mor-Viewer-${{ needs.version.outputs.version }}-${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
+
+      - run: cargo build --release --locked
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/release/${{ matrix.binary }} -DestinationPath "$env:PACKAGE.zip"
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar -czf "$PACKAGE.tar.gz" -C target/release ${{ matrix.binary }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}.*
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push'
+    needs: [ version, build ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: Mor-Viewer-${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          files: dist/*
+          fail_on_unmatched_files: true
