@@ -15,6 +15,8 @@
 | -             | -             |
 | <img width="1712" height="863" alt="texture-view" src=".github/images/texture-view.png" /> | <img width="1712" height="863" alt="font-view" src=".github/images/font-view.png" /> |
 
+[Дизайн на Figma](https://www.figma.com/design/zJDOhI3dZ83jExdDrxlsDf/Mor-Viewer?t=G1sQ7JZUY19zUTEY-1)
+
 ## Возможности
 
 | Тип | Расширения | Что может |
