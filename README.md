@@ -43,6 +43,14 @@
 
 ## Запуск
 
+<p align="center">
+  <a href="https://store.steampowered.com/app/384110/Pathologic_Classic_HD">
+    <img src=".github/images/steam_widget_384110_en.png" alt="Pathologic Classic HD - Steam store" width="646" height="190">
+  </a>
+  <b>Не забудьте купить оригинальную игру!</b>
+</p>
+<br>
+
 ```sh
 mor-viewer [папка_с_данными | архив.vfs | файл_игры]
 ```
@@ -89,3 +97,9 @@ src/
   viewer/           просмотрщики по типам файлов
     model/          3D-просмотрщик: камера, меню, оверлеи
 ```
+
+## Авторы
+
+- Ice-Pick Lodge - Создатели игры, Мор Утопия
+- Michael Soyka - Дизайн, проектные решения, ревью
+- Claude - Основной код вьювера
