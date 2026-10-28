@@ -43,6 +43,14 @@ The interface is available in Russian and English.
 
 ## Usage
 
+<p align="center">
+  <a href="https://store.steampowered.com/app/384110/Pathologic_Classic_HD">
+    <img src=".github/images/steam_widget_384110_en.png" alt="Pathologic Classic HD - Steam store" width="646" height="190">
+  </a>
+  <b>Don't forget to buy the original game!</b>
+</p>
+<br>
+
 ```sh
 mor-viewer [data_folder | archive.vfs | game_file]
 ```
@@ -89,3 +97,9 @@ src/
   viewer/           viewers by file type
     model/          3D viewer: camera, menus, overlays
 ```
+
+## Authors
+
+- Ice-Pick Lodge - Creators of the game, Pathologic
+- Michael Soyka - Design, project direction, review
+- Claude - General viewer code
