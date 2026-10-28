@@ -47,8 +47,11 @@ The interface is available in Russian and English.
   <a href="https://store.steampowered.com/app/384110/Pathologic_Classic_HD">
     <img src=".github/images/steam_widget_384110_en.png" alt="Pathologic Classic HD - Steam store" width="646" height="190">
   </a>
+</p>
+<p align="center">
   <b>Don't forget to buy the original game!</b>
 </p>
+
 <br>
 
 ```sh
